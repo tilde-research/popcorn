@@ -1,0 +1,47 @@
+name: Performance
+description: A backend is slower than expected, or the tuner routes to a slow one
+title: "[perf] "
+body:
+  - type: markdown
+    attributes:
+      value: >
+        The tuner only knows recorded rows: `python -m popcorn.bench view --user`
+        shows what your hardware has. No nearby rows means registration-order
+        fallback, not a considered choice.
+  - type: input
+    id: op-backend
+    attributes:
+      label: Kernel and backend
+      placeholder: swiglu / popcorn
+    validations:
+      required: true
+  - type: textarea
+    id: case
+    attributes:
+      label: Case
+      description: Shapes, batch, dtype, arguments, forward-only or with grad.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: numbers
+    attributes:
+      label: Observed timings
+      description: What you measured vs what you expected — `op.benchmark(...)` output, a bench row, or an external profile.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: popcorn, torch, and backend versions; GPU and driver.
+      render: text
+    validations:
+      required: true
+  - type: checkboxes
+    id: rows
+    attributes:
+      label: Recorded rows
+      options:
+        - label: My hardware has rows for this op (`python -m popcorn.bench view --user` shows it), so the tuner's pick is based on data.

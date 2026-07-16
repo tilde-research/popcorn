@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Contributing guide
+    url: https://github.com/tilde-research/popcorn/blob/main/CONTRIBUTING.md
+    about: Adding a kernel, a backend, or benchmark reports — the guided flow.
+  - name: Known accuracy quirks
+    url: https://github.com/tilde-research/popcorn/blob/main/ISSUES.md
+    about: Documented upstream tolerance issues that cannot pass the exactness harness.

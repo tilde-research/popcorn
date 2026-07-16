@@ -1,0 +1,60 @@
+name: Bug report
+description: Wrong results, a crash, or dispatch misbehavior
+title: "[bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        For correctness reports, check
+        [ISSUES.md](https://github.com/tilde-research/popcorn/blob/main/ISSUES.md)
+        first — documented upstream tolerance quirks are known and not bugs.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Correctness (backend disagrees with the reference)
+        - Dispatch (wrong or no backend selected, scoping, torch.compile)
+        - Benchmark harness (run / merge / view / submit)
+        - Install or build (packaging, CUDA extension, imports)
+    validations:
+      required: true
+  - type: input
+    id: op-backend
+    attributes:
+      label: Kernel and backend
+      description: Leave empty if the problem is not tied to one op.
+      placeholder: rms_norm / liger
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Minimal code or CLI invocation, including shapes, dtype, and arguments.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened
+      description: Observed vs expected, with the full error output or mismatch report.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: popcorn, torch, and backend package versions; GPU and driver; Python.
+      render: text
+      placeholder: |
+        popcorn 0.1.0, torch 2.10.0+cu128, liger-kernel 0.7.0
+        NVIDIA H100 80GB HBM3, driver 580.xx, python 3.12
+    validations:
+      required: true
+  - type: checkboxes
+    id: validation
+    attributes:
+      label: Validation
+      options:
+        - label: I ran the exact call with `validate=True` (or `POPCORN_VALIDATE=1`) and am reporting its outcome above.

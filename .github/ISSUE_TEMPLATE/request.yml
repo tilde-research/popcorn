@@ -1,0 +1,41 @@
+name: Kernel or backend request
+description: An op popcorn should have, or a library it should dispatch to
+title: "[request] "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Both flows are guided end to end in
+        [CONTRIBUTING.md](https://github.com/tilde-research/popcorn/blob/main/CONTRIBUTING.md)
+        if you want to add it yourself.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - New kernel (op popcorn does not have)
+        - New backend for an existing kernel
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What and where
+      description: >
+        The op and its reference semantics (paper or definition), or the library —
+        repository link, the function to bind, and its license (must be
+        Apache-2.0-compatible: MIT, BSD, Apache).
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: The workload it matters for, and expected gain over current backends if known.
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I am willing to open the PR for this following CONTRIBUTING.md.
