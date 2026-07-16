@@ -1,0 +1,287 @@
+import ast
+import importlib
+import math
+from argparse import Namespace
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import pytest
+import torch
+from jaxtyping import Float
+from torch import Tensor
+
+import popcorn
+from popcorn.bench import Case, Gauge, compare
+from popcorn.bench.__main__ import cmd_merge, cmd_run, cmd_submit
+from popcorn.bench.grid import cases, make_inputs
+from popcorn.bench.model import Environment, Record, Result
+from popcorn.bench.report import matrix, support
+from popcorn.bench.store import read, write
+from popcorn.bench.viewer import render
+from popcorn.core import Dispatcher
+from popcorn.core.config import call_config, config_id, make_config
+from popcorn.kernels._utils import default_scale, rms, upcast
+
+comparison = importlib.import_module("popcorn.bench.compare")
+
+
+def _record(status="pass", case_id="case", ts="2026-01-01T00:00:00+00:00"):
+    result = Result(status=status, grad=False)
+    environment = Environment("cpu", torch.__version__, None, ts)
+    config = {"dims": {"D": 4}, "batch": [], "dtype": "float32", "args": {}, "present": []}
+    return Record("op", "fast", "D=4", case_id, config, environment, result)
+
+
+def _op():
+    def reference(x: Float[Tensor, "D"]):
+        return x + 1
+
+    op = Dispatcher(reference, test_shapes={"D": {4}})
+    op.register("alt")(lambda x: x + 1)
+    return op
+
+
+def test_compare_is_callable_first():
+    result = compare(
+        lambda x, scale: x * scale,
+        lambda x, scale: x * scale,
+        {"x": torch.randn(8), "scale": 2},
+        benchmark=False,
+        repeats=2,
+    )
+    assert result.status == "pass"
+    assert result.reps == 2
+
+
+def test_compare_grades_forward_and_backward():
+    x = torch.randn(8)
+    result = compare(lambda x: x.square(), lambda x: x.square(), {"x": x}, benchmark=False, repeats=2)
+    assert result.status == "pass"
+    assert result.fwd and result.bwd
+
+    failed = compare(lambda x: x + 1, lambda x: x, {"x": x}, benchmark=False, repeats=1)
+    assert failed.status == "fail" and "out0" in failed.reason
+
+    precise = torch.ones(4, dtype=torch.float64)
+    failed = compare(lambda x: x + 1e-8, lambda x: x, {"x": precise}, benchmark=False, repeats=1)
+    assert failed.status == "fail"
+
+
+def test_compare_separates_kernel_and_reference_errors():
+    def broken(x):
+        raise RuntimeError("broken")
+
+    mine = compare(broken, lambda x: x, {"x": torch.ones(1)}, benchmark=False, repeats=1)
+    reference = compare(lambda x: x, broken, {"x": torch.ones(1)}, benchmark=False, repeats=1)
+    assert mine.status == "crash" and mine.reason == "RuntimeError: broken"
+    assert reference.status == "error" and reference.reason == "reference: RuntimeError: broken"
+
+
+def test_correctness_precedes_timing(monkeypatch):
+    called = False
+
+    def timer(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(comparison, "_benchmark", timer)
+    result = compare(lambda x: x + 1, lambda x: x, {"x": torch.ones(1)}, repeats=1)
+    assert result.status == "fail" and not called
+
+
+def test_benchmark_error_preserves_correctness(monkeypatch):
+    def timer(*args, **kwargs):
+        raise RuntimeError("timer failed")
+
+    monkeypatch.setattr(comparison, "_benchmark", timer)
+    result = compare(lambda x: x, lambda x: x, {"x": torch.ones(1)}, repeats=1)
+    assert result.status == "pass"
+    assert result.bench_error == "RuntimeError: timer failed"
+    assert not result.benchmarked
+
+
+def test_non_finite_errors_fail():
+    assert comparison._error(torch.tensor([float("nan")]), torch.tensor([float("nan")])) == 0
+    assert math.isinf(comparison._error(torch.tensor([float("nan")]), torch.tensor([1.0])))
+    assert Gauge(err=float("inf")).verdict(1e-3) == "err is non-finite"
+
+
+def test_reference_precision_helpers():
+    x = torch.ones(2, dtype=torch.float64)
+    assert upcast(x).dtype == torch.float64
+    assert upcast(x.half()).dtype == torch.float32
+    assert rms(x, 1e-6).dtype == torch.float64
+    assert default_scale(0.0, 64) == 0.0
+
+
+def test_grid_is_deterministic_and_uses_canonical_config():
+    op = _op()
+    grid = cases(op)
+    assert len(grid) == 3
+    assert [case.case_id for case in grid] == [case.case_id for case in cases(op)]
+    case = grid[0]
+    inputs = make_inputs(op, case, "cpu")
+    call = call_config(op, op._values(inputs), inputs)
+    assert call.config == case.config()
+    assert config_id(call.config) == case.case_id
+
+
+def test_config_values_are_json_stable():
+    config = make_config({"D": 4}, (), torch.float32, {"sections": (1, {3, 2})}, ())
+    assert config["args"] == {"sections": [1, [2, 3]]}
+
+
+def test_registered_service_uses_compare_without_persistence():
+    op = _op()
+    case = Case((("D", 4),), (), torch.float32, (), frozenset())
+    record = op.bench.run_case("alt", case, device="cpu", trials=1, benchmark=False, grad=False)
+    assert record.result.status == "pass"
+    assert not record.result.benchmarked
+    assert record.case_id == case.case_id
+
+
+def test_service_stamps_code_fingerprints():
+    op = _op()
+    case = Case((("D", 4),), (), torch.float32, (), frozenset())
+    record = op.bench.run_case("alt", case, device="cpu", trials=1, benchmark=False, grad=False)
+    assert record.environment.ref_hash == op.fingerprint is not None
+    assert record.environment.impl_hash == op["alt"].fingerprint is not None
+    revived = Record.from_dict(record.to_dict())
+    assert revived.environment.ref_hash == record.environment.ref_hash
+    assert revived.environment.impl_hash == record.environment.impl_hash
+
+
+def test_forward_only_backends_get_forward_grid_coverage():
+    op = _op()
+    op.register("fwd", forward_only=True)(lambda x: x + 1)
+    record = op.bench.run_case("fwd", cases(op)[0], device="cpu", trials=1, benchmark=False)
+    assert record.result.status == "pass"
+    assert record.result.grad is False
+
+
+def test_non_floating_outputs_are_value_checked():
+    x = torch.arange(4)
+    passed = compare(lambda x: x.clone(), lambda x: x, {"x": x}, benchmark=False, repeats=1, backward=False)
+    failed = compare(lambda x: x + 1, lambda x: x, {"x": x}, benchmark=False, repeats=1, backward=False)
+    assert passed.status == "pass"
+    assert failed.status == "fail" and "out0" in failed.reason
+
+
+def test_compare_leaves_global_rng_alone():
+    x = torch.randn(3, requires_grad=True)
+    torch.manual_seed(7)
+    expected = torch.randn(4)
+    torch.manual_seed(7)
+    compare(lambda x: x.square(), lambda x: x.square(), {"x": x}, benchmark=False, repeats=2)
+    assert torch.equal(torch.randn(4), expected)
+
+
+def test_store_upserts_and_preserves_conclusive_rows(tmp_path):
+    write([_record()], tmp_path)
+    write([_record("fail")], tmp_path)
+    assert read(tmp_path)[0].result.status == "fail"
+
+    failure = _record("fail", ts="2026-01-01T00:00:00+00:00")
+    harness = _record("error", ts="2026-01-02T00:00:00+00:00")
+    write([failure], tmp_path)
+    write([harness], tmp_path)
+    assert read(tmp_path)[0].result.status == "fail"
+
+
+def test_store_rejects_unversioned_rows(tmp_path):
+    path = tmp_path / "op.jsonl"
+    path.write_text('{"op": "op"}\n')
+    with pytest.raises(ValueError, match="unsupported report schema"):
+        read(tmp_path)
+
+
+def test_concurrent_store_upserts_are_atomic(tmp_path):
+    records = [_record(case_id=str(index)) for index in range(16)]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda record: write([record], tmp_path), records))
+    assert sorted((record.case_id for record in read(tmp_path)), key=int) == [str(index) for index in range(16)]
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_reports_and_viewer_consume_typed_records():
+    records = [_record(), _record("skip", "other")]
+    assert "| `op` | ✔ | ✔* |" in support(records)
+    assert "| op | fast | cpu | 1 | 1 |" in matrix(records)
+    assert "No report rows." in render([])
+    assert '"schema":2' in render(records)
+
+
+def test_empty_cli_work_is_an_error(tmp_path):
+    with pytest.raises(SystemExit, match="no report rows"):
+        cmd_merge(Namespace(sources=[tmp_path / "missing.jsonl"], expect=None))
+    with pytest.raises(SystemExit, match="expected 2 shard files"):
+        cmd_merge(Namespace(sources=[tmp_path / "one.jsonl"], expect=2))
+    with pytest.raises(SystemExit, match="no matching"):
+        cmd_run(
+            Namespace(
+                ops=["rms_norm"],
+                backend="torch",
+                limit=1,
+                shard=None,
+                reps=1,
+                device="cpu",
+                out=None,
+            )
+        )
+
+
+def test_slurm_submit_dry_run_builds_a_sharded_script(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cmd_submit(
+        Namespace(
+            ops=["rms_norm"],
+            array=2,
+            reps=1,
+            limit=1,
+            qos=None,
+            time="00:10:00",
+            dry_run=True,
+        )
+    )
+    script = (tmp_path / "logs" / "popcorn_bench.slurm").read_text()
+    assert "#SBATCH --array=0-1" in script
+    assert "--qos" not in script  # unset QoS leaves the cluster default
+    assert 'TRITON_CACHE_DIR="/tmp/triton_' in script
+    assert '--shard "$SLURM_ARRAY_TASK_ID/2"' in script
+
+
+def test_slurm_submit_includes_qos_when_given(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cmd_submit(Namespace(ops=["rms_norm"], array=1, reps=1, limit=1, qos="batch", time="00:10:00", dry_run=True))
+    script = (tmp_path / "logs" / "popcorn_bench.slurm").read_text()
+    assert "#SBATCH --qos=batch\n" in script
+
+
+def test_production_benchmark_modules_have_no_local_imports():
+    root = Path(popcorn.__file__).parent
+    paths = [
+        *sorted((root / "bench").glob("*.py")),
+        root / "core" / "config.py",
+        root / "core" / "dispatcher.py",
+        root / "core" / "tuning.py",
+    ]
+    for path in paths:
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            imports = [child for child in ast.walk(node) if isinstance(child, (ast.Import, ast.ImportFrom))]
+            assert not imports, f"{path.relative_to(root)}:{node.lineno} contains a function-local import"
+
+
+def test_import_layers_have_no_back_edges():
+    root = Path(popcorn.__file__).parent
+    forbidden = {
+        "bench/compare.py": ("popcorn.core.dispatcher", "popcorn.core.tuning", "popcorn.bench.service"),
+        "bench/grid.py": ("popcorn.core.dispatcher", "popcorn.core.tuning", "popcorn.bench.service"),
+        "bench/store.py": ("popcorn.core.dispatcher", "popcorn.core.tuning", "popcorn.bench.service"),
+        "core/tuning.py": ("popcorn.bench.compare", "popcorn.bench.grid", "popcorn.bench.service"),
+    }
+    for relative, names in forbidden.items():
+        text = (root / relative).read_text()
+        assert not any(name in text for name in names)

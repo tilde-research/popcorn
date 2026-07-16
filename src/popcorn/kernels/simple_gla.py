@@ -1,0 +1,33 @@
+import torch
+import torch.nn.functional as F
+from jaxtyping import Float
+from torch import Tensor
+
+from popcorn import Range, kernel, register_kernel
+from popcorn.kernels._utils import default_scale, upcast
+
+
+@register_kernel(
+    test_shapes={"batch": Range(1, 8), "seq": Range(2, 256), "heads": {4}, "key_dim": {64}, "value_dim": {64}},
+    test_args={"softmax_scale": [None, 0.25]},
+    test_inputs={"g": F.logsigmoid},
+)
+def simple_gla(
+    q: Float[Tensor, "batch seq heads key_dim"],
+    k: Float[Tensor, "batch seq heads key_dim"],
+    v: Float[Tensor, "batch seq heads value_dim"],
+    g: Float[Tensor, "batch seq heads"],
+    softmax_scale: float | None = None,
+) -> Float[Tensor, "batch seq heads value_dim"]:
+    """Gated linear attention with a scalar per-head log forget gate `g`
+    (arXiv:2312.06635, the scalar-gate case)."""
+    scale = default_scale(softmax_scale, q.shape[-1])
+    decay = upcast(g).cumsum(1).transpose(1, 2)
+    decay = (decay[..., :, None] - decay[..., None, :]).tril().exp().tril()
+    scores = torch.einsum("bqhk,bjhk->bhqj", upcast(q) * scale, upcast(k))
+    return torch.einsum("bhqj,bjhv->bqhv", scores * decay, upcast(v)).to(q.dtype)
+
+
+@simple_gla.register("fla", source="fla.ops.simple_gla.chunk_simple_gla")
+def simple_gla_fla(q, k, v, g, softmax_scale):
+    return kernel(q, k, v, g, scale=softmax_scale)[0]
