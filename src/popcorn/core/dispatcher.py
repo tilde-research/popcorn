@@ -248,6 +248,7 @@ class Dispatcher:
         self._contextual_inputs = frozenset(name for name, transform in self.test_inputs.items() if _takes_context(transform))
 
         # dispatch state
+        self.torch_op: Any = None  # torch.library binding, set by bind_torch_op
         self._backends: list[Backend] = [Backend(self, "torch", adapter=reference)]
         self.bench = BenchmarkService(self)
         self.tuner = Tuner(self, self.bench.store)

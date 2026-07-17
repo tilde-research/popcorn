@@ -70,7 +70,7 @@ ignore = ["F722", "F821"]
 # Typed surface: the dispatcher and harness. Kernel references use jaxtyping and
 # adapters intentionally leave parameters bare (annotations become dispatch gates).
 [tool.pyright]
-include = ["src/popcorn/core", "src/popcorn/bench"]
+include = ["src/popcorn/core", "src/popcorn/bench", "src/popcorn/compile.py"]
 exclude = ["**/__pycache__", ".venv"]
 typeCheckingMode = "basic"
 reportMissingImports = false

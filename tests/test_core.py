@@ -879,14 +879,15 @@ class TestTorchOp:
             out = torch.ops.popcorn.rms_norm(torch.empty(4, 8, dtype=torch.bfloat16), torch.empty(8, dtype=torch.bfloat16))
         assert tuple(out.shape) == (4, 8) and out.dtype == torch.bfloat16
 
-    def test_grad_calls_raise(self):
+    def test_grad_replays_through_dispatcher(self):
         x = torch.randn(3, 8, requires_grad=True)
-        w = torch.randn(8)
+        w = torch.randn(8, requires_grad=True)
         with self.op["torch"]:
-            with pytest.raises(RuntimeError, match="inference-only"):
-                torch.ops.popcorn.rms_norm(x, w)
-            with torch.no_grad():
-                torch.ops.popcorn.rms_norm(x, w)  # grad off: fine
+            torch.ops.popcorn.rms_norm(x, w).square().sum().backward()
+        xr, wr = (t.detach().clone().requires_grad_() for t in (x, w))
+        self.op.reference(xr, wr).square().sum().backward()
+        assert torch.allclose(x.grad, xr.grad, atol=1e-6)
+        assert torch.allclose(w.grad, wr.grad, atol=1e-6)
 
 
 class TestKernelAmbient:
