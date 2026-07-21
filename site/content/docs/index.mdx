@@ -1,0 +1,46 @@
+---
+title: Overview
+description: A development and dispatch library for high-performance ML kernels
+---
+
+**Popcorn** is a development and dispatch library for high-performance machine learning
+kernels. It unifies 96 kernels and more than 100 optimized implementations behind a single
+API and automatically selects the fastest backend for your hardware. Every backend is
+rigorously validated against a reference implementation and benchmarked in a consistent
+suite, so speed never comes at the cost of correctness.
+
+Popcorn also ships a growing collection of first-party kernels, along with the environment
+and harness to build, test, benchmark, and deploy new kernels and backends.
+
+<Cards>
+  <Card title="Quickstart" href="/docs/quickstart" description="Install and dispatch your first kernel." />
+  <Card title="Kernel explorer" href="/kernels" description="Browse every kernel: math, backends, and measured performance." />
+  <Card title="Contributing" href="https://github.com/tilde-research/popcorn/blob/main/CONTRIBUTING.md" description="Add kernels and backends." />
+</Cards>
+
+## Terminology
+
+Some frequently used terms are overloaded; Popcorn uses them precisely:
+
+| Term | Meaning |
+| --- | --- |
+| **Kernel** | A pure unit of work with a fixed signature and semantics defined by a *ground-truth* reference. |
+| **Input** | A valid configuration of arguments for a kernel call. |
+| **Case** | The set of all inputs with matching tensor metadata (shape, type) and other arguments — the data inside tensors is abstracted away. |
+| **Implementation** | A function that matches the output of a *kernel's reference* for a subset of valid cases. |
+| **Backend** | A library or collection of *kernel implementations*. |
+
+## How dispatch works
+
+Each call resolves to one implementation in three steps:
+
+1. **Eligibility.** An implementation is a candidate only when its package is installed at a
+   supported version, it has a backward pass if the call needs gradients, and the inputs
+   satisfy its declared shape, dtype, and value constraints.
+2. **Correctness.** Implementations with a recorded failure for this exact case are excluded.
+3. **Speed.** Among the remaining candidates, the fastest wins, judged by the nearest recorded
+   benchmark on the same device, dtype, and gradient mode. The reference competes on equal
+   terms: when it measures fastest, it is selected.
+
+The decision is memoized per call configuration, so dispatch adds negligible overhead in
+steady state.

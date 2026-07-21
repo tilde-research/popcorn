@@ -1,0 +1,35 @@
+'use client';
+import Plotly from 'plotly.js-cartesian-dist-min';
+import { useEffect, useRef } from 'react';
+
+/** Thin imperative bridge to Plotly with theme-aware defaults. */
+export function PlotFrame({ data, layout }: { data: unknown[]; layout: Record<string, unknown> }) {
+  const root = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    const styles = getComputedStyle(element);
+    void Plotly.react(
+      element,
+      data,
+      {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: styles.color, family: styles.fontFamily, size: 12 },
+        margin: { l: 56, r: 16, t: 16, b: 44 },
+        ...layout,
+      },
+      { responsive: true, displaylogo: false },
+    );
+  }, [data, layout]);
+
+  useEffect(() => {
+    const element = root.current;
+    return () => {
+      if (element) Plotly.purge(element);
+    };
+  }, []);
+
+  return <div ref={root} className="h-[420px] w-full" />;
+}
