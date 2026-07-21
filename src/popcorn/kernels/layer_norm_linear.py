@@ -2,10 +2,10 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 
 
-@register_kernel(test_args={"eps": [1e-6, 1e-5]})
+@register_kernel(test_args={"eps": [1e-6, 1e-5]}, tags={Tag.NORMALIZATION, Tag.LINEAR, Tag.FUSED, Tag.FEATURE_MIXER})
 def layer_norm_linear(
     x: Float[Tensor, "... hidden"],
     norm_weight: Float[Tensor, "hidden"],
@@ -14,7 +14,12 @@ def layer_norm_linear(
     linear_bias: Float[Tensor, "out_features"] | None = None,
     eps: float = 1e-6,
 ) -> Float[Tensor, "... out_features"]:
-    """Layer norm followed by a linear projection, fused by optimized backends."""
+    r"""Layer norm fused with a linear projection.
+
+    $$y = \mathrm{LN}_{w_n, b_n}(x) \, w_l^\top + b_l$$
+
+    [Layer Normalization (Ba et al., 2016)](https://arxiv.org/abs/1607.06450)
+    """
     h = F.layer_norm(x, norm_weight.shape, norm_weight, norm_bias, eps)
     return F.linear(h, linear_weight, linear_bias)
 

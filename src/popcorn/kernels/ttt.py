@@ -2,7 +2,7 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
@@ -15,6 +15,7 @@ from popcorn.kernels._utils import upcast
         "w": lambda t: 1 + 0.1 * t,
         "b": lambda t: 0.1 * t,
     },
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def ttt(
     q: Float[Tensor, "batch seq heads head_dim"],
@@ -26,8 +27,13 @@ def ttt(
     eps: float = 1e-6,
     mini_batch_size: int = 16,
 ) -> Float[Tensor, "batch seq heads head_dim"]:
-    """TTT-linear (arXiv:2407.04620): the hidden state is a linear model updated
-    by one step of layer-norm reconstruction gradient descent per mini batch."""
+    r"""TTT-linear: the hidden state is a linear model trained by gradient descent at test time.
+
+    $$W_t = W_{t-1} - \eta_t \nabla_W \big\lVert \mathrm{LN}(k_t W_{t-1}) - (v_t - k_t) \big\rVert^2,
+    \qquad o_t \approx \mathrm{LN}(q_t W_t)$$
+
+    [TTT (Sun et al., 2024)](https://arxiv.org/abs/2407.04620)
+    """
 
     def stats(t):
         mean = t.mean(-1, keepdim=True)

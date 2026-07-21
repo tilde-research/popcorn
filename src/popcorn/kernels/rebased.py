@@ -2,11 +2,14 @@ import torch
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
-@register_kernel(test_shapes={"batch": Range(1, 8), "seq": Range(2, 256), "heads": {4}, "key_dim": {16}, "value_dim": {64}})
+@register_kernel(
+    test_shapes={"batch": Range(1, 8), "seq": Range(2, 256), "heads": {4}, "key_dim": {16}, "value_dim": {64}},
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
+)
 def rebased(
     q: Float[Tensor, "batch seq heads key_dim"],
     k: Float[Tensor, "batch seq heads key_dim"],
@@ -15,8 +18,13 @@ def rebased(
     use_scale: bool = True,
     use_normalize: bool = True,
 ) -> Float[Tensor, "batch seq heads value_dim"]:
-    """ReBased linear attention (arXiv:2402.10644): a learned-free quadratic
-    feature map, (qk)^2."""
+    r"""ReBased linear attention: a pure quadratic feature map on the scores.
+
+    $$a_{ts} = \big(q_t^\top k_s\big)^2, \qquad
+    o_t = \frac{\sum_{s \le t} a_{ts} v_s}{\sum_{s \le t} a_{ts} + \varepsilon}$$
+
+    [ReBased (Aksenov et al., 2024)](https://arxiv.org/abs/2402.10644)
+    """
     scale = q.shape[-1] ** -0.5 if use_scale else 1.0
     scores = torch.einsum("bqhk,bjhk->bhqj", upcast(q) * scale, upcast(k))
     attn = scores.square().tril()

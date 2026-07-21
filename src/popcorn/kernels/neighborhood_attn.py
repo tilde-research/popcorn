@@ -2,13 +2,15 @@ import torch
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
+# The window clamps at sequence boundaries (liger convention, unlike NATTEN).
 @register_kernel(
     test_shapes={"batch": Range(1, 8), "heads": {4}, "seq": Range(2, 128), "head_dim": {64}},
     test_args={"kernel_size": [3, 7], "dilation": [1, 2], "softmax_scale": [None, 0.25]},
+    tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION},
 )
 def neighborhood_attn(
     q: Float[Tensor, "batch heads seq head_dim"],
@@ -18,9 +20,13 @@ def neighborhood_attn(
     dilation: int = 1,
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch heads seq head_dim"]:
-    """Neighborhood attention (arXiv:2204.07143): each query attends to keys
-    within `kernel_size // 2 * dilation` positions, at multiples of `dilation`.
-    The window clamps at sequence boundaries (liger convention, unlike NATTEN)."""
+    r"""Attention restricted to a dilated local window around each query.
+
+    $$y_i = \operatorname{softmax}_{j \,:\, |j - i| \le \lfloor K/2 \rfloor \delta,\; \delta \mid (j - i)}
+    \big(c \, q_i k_j^\top\big) \, v_j$$
+
+    [Neighborhood Attention Transformer (Hassani et al., 2022)](https://arxiv.org/abs/2204.07143)
+    """
     scale = default_scale(softmax_scale, q.shape[-1])
     t = q.shape[2]
     i = torch.arange(t, device=q.device)[:, None]

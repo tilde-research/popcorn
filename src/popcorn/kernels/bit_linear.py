@@ -2,12 +2,14 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import register_kernel
+from popcorn import Tag, register_kernel
 from popcorn.kernels._quant import activation_quant, weight_quant
 from popcorn.kernels._utils import rms
 
 
-@register_kernel
+# The normalization eps is fixed at 1e-6: fla's `bit_linear` accepts an `eps`
+# argument but drops it (see ISSUES.md), so the reference does not expose one.
+@register_kernel(tags={Tag.LINEAR, Tag.QUANTIZED, Tag.NORMALIZATION, Tag.FUSED})
 def bit_linear(
     x: Float[Tensor, "... hidden"],
     weight: Float[Tensor, "out_features hidden"],
@@ -15,10 +17,11 @@ def bit_linear(
     norm_weight: Float[Tensor, "hidden"] | None = None,
     norm_bias: Float[Tensor, "hidden"] | None = None,
 ) -> Float[Tensor, "... out_features"]:
-    """BitLinear (arXiv:2310.11453): rms-norm, int8 activations, ternary weights.
+    r"""BitLinear: RMS norm, int8 activation quant, ternary weight quant, then the projection.
 
-    The normalization eps is fixed at 1e-6: fla's `bit_linear` accepts an `eps`
-    argument but drops it (see ISSUES.md), so the reference does not expose one.
+    $$y = Q_{\mathrm{int8}}\!\big(\mathrm{RMSNorm}(x)\big) \, Q_{\{-1,0,1\}}(w)^\top + b$$
+
+    [BitNet (Wang et al., 2023)](https://arxiv.org/abs/2310.11453)
     """
     h = rms(x, 1e-6)
     if norm_weight is not None:

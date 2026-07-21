@@ -2,12 +2,15 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import register_kernel
+from popcorn import Tag, register_kernel
 
 
-@register_kernel
+@register_kernel(tags={Tag.ACTIVATION})
 def sigmoid(x: Float[Tensor, "... hidden"]) -> Float[Tensor, "... hidden"]:
-    """Logistic sigmoid: `1 / (1 + exp(-x))`."""
+    r"""Logistic sigmoid.
+
+    $$y = \frac{1}{1 + e^{-x}}$$
+    """
     return torch.sigmoid(x)
 
 

@@ -2,10 +2,14 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Div, kernel, register_kernel
+from popcorn import Div, Tag, kernel, register_kernel
 
 
-@register_kernel(test_shapes={"channels": Div(4)}, test_args={"num_groups": [1, 4], "eps": [1e-6, 1e-5]})
+@register_kernel(
+    test_shapes={"channels": Div(4)},
+    test_args={"num_groups": [1, 4], "eps": [1e-6, 1e-5]},
+    tags={Tag.NORMALIZATION, Tag.LINEAR, Tag.FUSED, Tag.FEATURE_MIXER},
+)
 def group_norm_linear(
     x: Float[Tensor, "tokens channels"],
     norm_weight: Float[Tensor, "channels"],
@@ -15,7 +19,12 @@ def group_norm_linear(
     num_groups: int = 1,
     eps: float = 1e-6,
 ) -> Float[Tensor, "tokens out_features"]:
-    """Group norm followed by a linear projection, fused by optimized backends."""
+    r"""Group norm fused with a linear projection.
+
+    $$y = \mathrm{GN}_{w_n, b_n}(x) \, w_l^\top + b_l$$
+
+    [Group Normalization (Wu & He, 2018)](https://arxiv.org/abs/1803.08494)
+    """
     h = F.group_norm(x, num_groups, norm_weight, norm_bias, eps)
     return F.linear(h, linear_weight, linear_bias)
 

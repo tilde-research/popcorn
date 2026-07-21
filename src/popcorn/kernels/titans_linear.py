@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
@@ -26,6 +26,7 @@ def _standardize(x, eps):
         "eta": lambda t: 0.5 + 0.5 * torch.sigmoid(t),
         "initial_state": lambda t: 0.1 * t,
     },
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def titans_linear(
     q: Float[Tensor, "batch seq heads head_dim"],
@@ -44,7 +45,13 @@ def titans_linear(
     Float[Tensor, "batch seq heads head_dim"],
     Float[Tensor, "batch heads head_dim head_dim"] | None,
 ]:
-    """Titans linear memory with chunk-local reconstruction gradients."""
+    r"""Titans linear memory: momentum gradient descent on a reconstruction loss, with forgetting.
+
+    $$m_t = \eta_t m_{t-1} - 2\theta_t \nabla_M \ell_t(M_{t-1}), \qquad
+    M_t = (1 - \alpha_t) M_{t-1} + m_t, \qquad o_t = q_t^\top M_t$$
+
+    [Titans (Behrouz et al., 2024)](https://arxiv.org/abs/2501.00663)
+    """
     dtype = q.dtype
     q, k, v, w, b, theta, alpha, eta = map(upcast, (q, k, v, w, b, theta, alpha, eta))
     batch, seq, heads, head_dim = q.shape

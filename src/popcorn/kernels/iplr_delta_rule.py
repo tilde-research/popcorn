@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
@@ -21,6 +21,7 @@ def _unit(t):
     },
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"a": _unit, "b": lambda t: -_unit(t), "initial_state": lambda t: 0.1 * t},
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def iplr_delta_rule(
     q: Float[Tensor, "batch seq heads key_dim"],
@@ -34,9 +35,11 @@ def iplr_delta_rule(
     Float[Tensor, "batch seq heads value_dim"],
     Float32[Tensor, "batch heads key_dim value_dim"],
 ]:
-    """Identity-plus-low-rank delta rule with explicit recurrent state.
+    r"""Identity-plus-low-rank delta rule with explicit recurrent state.
 
-    Each step applies ``S <- (I + b a^T) S + k v^T`` and reads ``q^T S``.
+    $$S_t = \big(I + b_t a_t^\top\big) S_{t-1} + k_t v_t^\top, \qquad o_t = c \, q_t^\top S_t$$
+
+    [DeltaNet (Yang et al., 2024)](https://arxiv.org/abs/2406.06484)
     """
     scale = default_scale(softmax_scale, q.shape[-1])
     q32, k32, v32, a32, b32, state = map(upcast, (q, k, v, a, b, initial_state))

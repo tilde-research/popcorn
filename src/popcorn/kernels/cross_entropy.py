@@ -4,10 +4,10 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32, Int
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 
 
-@register_kernel(test_shapes={"vocab": Range(2, 4096)}, test_args={"label_smoothing": [0.0, 0.1]})
+@register_kernel(test_shapes={"vocab": Range(2, 4096)}, test_args={"label_smoothing": [0.0, 0.1]}, tags={Tag.LOSS})
 def cross_entropy(
     logits: Float[Tensor, "tokens vocab"],
     labels: Int[Tensor, "tokens"],
@@ -15,7 +15,10 @@ def cross_entropy(
     label_smoothing: float = 0.0,
     reduction: Literal["mean", "sum", "none"] = "mean",
 ) -> Float[Tensor, "..."]:
-    """Softmax cross-entropy over logits with ignore-index and label smoothing, matching `F.cross_entropy`."""
+    r"""Softmax cross-entropy with ignore-index and label smoothing, matching torch semantics.
+
+    $$\mathcal{L}_t = -\log \operatorname{softmax}(x_t)_{y_t}$$
+    """
     return F.cross_entropy(logits, labels, ignore_index=ignore_index, label_smoothing=label_smoothing, reduction=reduction)
 
 

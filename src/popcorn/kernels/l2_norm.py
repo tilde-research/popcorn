@@ -2,12 +2,15 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import register_kernel
+from popcorn import Tag, register_kernel
 
 
-@register_kernel(test_args={"eps": [1e-6, 1e-5]})
+@register_kernel(test_args={"eps": [1e-6, 1e-5]}, tags={Tag.NORMALIZATION})
 def l2_norm(x: Float[Tensor, "... hidden"], eps: float = 1e-6) -> Float[Tensor, "... hidden"]:
-    """L2 normalization along the last dim: `x * rsqrt(sum(x^2) + eps)`."""
+    r"""L2 normalization along the last dim.
+
+    $$y = \frac{x}{\sqrt{\sum_i x_i^2 + \varepsilon}}$$
+    """
     return x * torch.rsqrt(x.pow(2).sum(-1, keepdim=True) + eps)
 
 

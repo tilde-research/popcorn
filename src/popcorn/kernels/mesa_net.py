@@ -3,13 +3,14 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
     test_shapes={"batch": Range(1, 4), "seq": Range(2, 64), "heads": {4}, "key_dim": {32}},
     test_inputs={"g": F.logsigmoid, "beta": torch.sigmoid, "lamb": F.softplus},
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def mesa_net(
     q: Float[Tensor, "batch seq heads key_dim"],
@@ -19,8 +20,14 @@ def mesa_net(
     beta: Float[Tensor, "batch seq heads"],
     lamb: Float[Tensor, "heads key_dim"],
 ) -> Float[Tensor, "batch seq heads key_dim"]:
-    """MesaNet (arXiv:2506.05233): each step solves the ridge regression
-    (H_kk + diag(lamb)) q* = q against gated key/value statistics."""
+    r"""MesaNet: each step solves a ridge regression against gated key/value statistics.
+
+    $$H_t = e^{g_t} H_{t-1} + \beta_t k_t k_t^\top, \quad
+    G_t = e^{g_t} G_{t-1} + \beta_t k_t v_t^\top, \quad
+    o_t = G_t^\top \big(H_t + \mathrm{diag}(\lambda)\big)^{-1} q_t$$
+
+    [MesaNet (von Oswald et al., 2025)](https://arxiv.org/abs/2506.05233)
+    """
     q32, k32, v32, g32, beta32 = map(upcast, (q, k, v, g, beta))
     batch, seq, heads, dim = q.shape
     h_kk = q32.new_zeros(batch, heads, dim, dim)

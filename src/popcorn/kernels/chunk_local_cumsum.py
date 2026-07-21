@@ -2,13 +2,14 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
     test_shapes={"batch": {1}, "first": {9}, "second": {9}, "width": {16}},
     test_args={"chunk_size": [4], "scale": [None, 0.5]},
+    tags={Tag.REDUCTION},
 )
 def chunk_local_cumsum(
     g: Float[Tensor, "batch first second width"],
@@ -17,7 +18,10 @@ def chunk_local_cumsum(
     scale: float | None = None,
     head_first: bool = False,
 ) -> Float[Tensor, "batch first second width"]:
-    """Inclusive cumsum reset at chunk boundaries in either FLA layout."""
+    r"""Inclusive cumsum reset at chunk boundaries, in either FLA layout.
+
+    $$y_t = c \sum_{u = \lfloor t/C \rfloor C}^{t} g_u$$
+    """
     axis = 2 if head_first else 1
     chunks = []
     for chunk in upcast(g).split(chunk_size, axis):

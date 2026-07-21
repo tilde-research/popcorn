@@ -2,12 +2,17 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 from popcorn.kernels.jsd import generalized_jsd
 
 
-@register_kernel(test_shapes={"vocab": Range(2, 4096)}, test_args={"beta": [0.5], "temperature": [1.0, 2.0]})
+# The teacher branch is a constant, matching liger.
+@register_kernel(
+    test_shapes={"vocab": Range(2, 4096)},
+    test_args={"beta": [0.5], "temperature": [1.0, 2.0]},
+    tags={Tag.LOSS, Tag.LINEAR, Tag.FUSED},
+)
 def linear_jsd(
     student: Float[Tensor, "tokens hidden"],
     teacher: Float[Tensor, "tokens teacher_hidden"],
@@ -16,8 +21,12 @@ def linear_jsd(
     beta: float = 0.5,
     temperature: float = 1.0,
 ) -> Float[Tensor, ""]:
-    """JSD between student and teacher lm-head outputs, fused with both
-    projections; the teacher branch is a constant, matching liger."""
+    r"""Generalized JSD between student and teacher lm-head outputs, fused with both projections.
+
+    $$\mathcal{L} = \frac{1}{T} \sum_t \mathrm{JSD}_\beta\!\Big(
+    \operatorname{softmax}\!\big(s_t w_s^\top / \tau\big) \,\Big\|\,
+    \operatorname{softmax}\!\big(u_t w_u^\top / \tau\big)\Big)$$
+    """
     log_p = (upcast(F.linear(student, student_weight)) / temperature).log_softmax(-1)
     log_q = (upcast(F.linear(teacher, teacher_weight)) / temperature).log_softmax(-1).detach()
     return generalized_jsd(log_p, log_q, beta).sum() / student.shape[0]

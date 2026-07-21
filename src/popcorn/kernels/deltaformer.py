@@ -4,13 +4,14 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 128), "heads": {4}, "head_dim": {64}},
     test_inputs={"beta": torch.sigmoid},
+    tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION},
 )
 def deltaformer(
     q: Float[Tensor, "batch seq heads head_dim"],
@@ -18,8 +19,12 @@ def deltaformer(
     v: Float[Tensor, "batch seq heads head_dim"],
     beta: Float[Tensor, "batch seq heads"] | None = None,
 ) -> Float[Tensor, "batch seq heads head_dim"]:
-    """DeltaFormer (arXiv:2505.19488): values are first corrected by a strictly
-    causal delta rule in softmax-attention space, then attended normally."""
+    r"""Values corrected by a strictly causal delta rule in attention space, then attended normally.
+
+    $$u_t = v_t - \beta_t \sum_{s < t} \tilde{p}_{ts} u_s, \qquad y = \operatorname{softmax}(c\, q k^\top) \, u$$
+
+    [DeltaFormer (Zhong et al., 2025)](https://arxiv.org/abs/2505.19488)
+    """
     scale = q.shape[-1] ** -0.5
     q32, k32, v32 = (upcast(t).transpose(1, 2) for t in (q, k, v))
     scores = q32 @ k32.transpose(-1, -2) * scale

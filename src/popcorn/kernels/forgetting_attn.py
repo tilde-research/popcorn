@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
@@ -11,6 +11,7 @@ from popcorn.kernels._utils import default_scale, upcast
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 512), "heads": {4}, "kv_heads": {2}, "head_dim": {64}},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"g": F.logsigmoid},
+    tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION},
 )
 def forgetting_attn(
     q: Float[Tensor, "batch seq heads head_dim"],
@@ -19,8 +20,12 @@ def forgetting_attn(
     g: Float[Tensor, "batch seq heads"],
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch seq heads head_dim"]:
-    """Forgetting attention (arXiv:2410.04168): causal softmax attention with a
-    learned per-head log forget gate `g` accumulated over key positions."""
+    r"""Causal softmax attention with a learned per-head log forget gate on the scores.
+
+    $$s_{ij} = c \, q_i k_j^\top + D_i - D_j, \qquad D = \mathrm{cumsum}(g)$$
+
+    [Forgetting Transformer (Lin et al., 2025)](https://arxiv.org/abs/2503.02130)
+    """
     seq, scale = q.shape[1], default_scale(softmax_scale, q.shape[-1])
     groups = q.shape[2] // k.shape[2]
     k, v = (upcast(t).repeat_interleave(groups, 2) for t in (k, v))

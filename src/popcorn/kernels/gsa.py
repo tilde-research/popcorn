@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
@@ -19,6 +19,7 @@ from popcorn.kernels._utils import default_scale, upcast
     },
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"g": F.logsigmoid},
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def gsa(
     q: Float[Tensor, "batch seq heads key_dim"],
@@ -28,8 +29,14 @@ def gsa(
     g: Float[Tensor, "batch seq kv_heads slots"],
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch seq heads value_dim"]:
-    """Gated slot attention (arXiv:2409.07146): two chained gated linear
-    attention passes through a softmax over memory slots."""
+    r"""Gated slot attention: two chained gated linear-attention passes through softmaxed slots.
+
+    $$K_t = K_{t-1} \, \mathrm{diag}\!\big(e^{g_t}\big) + k_t s_t^\top, \quad
+    V_t = \mathrm{diag}\!\big(e^{g_t}\big) V_{t-1} + s_t v_t^\top, \quad
+    o_t = V_t^\top \operatorname{softmax}\!\big(K_t^\top q_t\big)$$
+
+    [Gated Slot Attention (Zhang et al., 2024)](https://arxiv.org/abs/2409.07146)
+    """
     scale = default_scale(softmax_scale, q.shape[-1])
     groups = q.shape[2] // k.shape[2]
     k32, v32, s32, gate = (upcast(t).repeat_interleave(groups, 2) for t in (k, v, s, g))

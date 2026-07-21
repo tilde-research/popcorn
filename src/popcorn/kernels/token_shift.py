@@ -2,13 +2,17 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, register_kernel
+from popcorn import Range, Tag, register_kernel
 
 
-@register_kernel(test_shapes={"batch": Range(1, 8), "seq": Range(2, 512), "hidden": Range(8, 4096)})
+@register_kernel(test_shapes={"batch": Range(1, 8), "seq": Range(2, 512), "hidden": Range(8, 4096)}, tags={Tag.SEQUENCE_MIXER})
 def token_shift(x: Float[Tensor, "batch seq hidden"]) -> Float[Tensor, "batch seq hidden"]:
-    """RWKV token shift: the previous token's features minus the current ones
-    (the first position sees zeros)."""
+    r"""RWKV token shift: the previous token's features minus the current ones.
+
+    $$y_t = x_{t-1} - x_t, \qquad x_{-1} = 0$$
+
+    [RWKV (Peng et al., 2023)](https://arxiv.org/abs/2305.13048)
+    """
     return F.pad(x, (0, 0, 1, -1)) - x
 
 

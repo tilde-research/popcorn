@@ -2,7 +2,7 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 
 
 def _unit_pairs(t):
@@ -30,14 +30,19 @@ def _rotate(x, freqs):
         "head_dim": {32},
     },
     test_inputs={"freqs": _unit_pairs},
+    tags={Tag.POSITIONAL},
 )
 def llama4_rope(
     q: Float[Tensor, "batch seq heads head_dim"],
     k: Float[Tensor, "batch seq kv_heads head_dim"],
     freqs: Float[Tensor, "seq half 2"],
 ) -> tuple[Float[Tensor, "batch seq heads head_dim"], Float[Tensor, "batch seq kv_heads head_dim"]]:
-    """Paired Llama 4 rotary embedding with frequencies stored as real/imaginary
-    pairs, avoiding a complex tensor input."""
+    r"""Paired Llama 4 rotary embedding, frequencies as real/imaginary pairs instead of complex.
+
+    $$y_{2j} + i\, y_{2j+1} = (x_{2j} + i\, x_{2j+1}) \, f_{tj}, \qquad |f_{tj}| = 1$$
+
+    [RoFormer (Su et al., 2021)](https://arxiv.org/abs/2104.09864)
+    """
     freqs = freqs.detach()[None, :, None]
     return _rotate(q, freqs), _rotate(k, freqs)
 

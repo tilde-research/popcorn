@@ -10,7 +10,6 @@ from popcorn.bench.model import Record
 from popcorn.bench.store import BUNDLED_REPORTS, read
 
 PACKAGE = Path(__file__).parents[1]
-MARKERS = ("<!-- popcorn:matrix -->", "<!-- /popcorn:matrix -->")
 BADGE_MARKERS = ("<!-- popcorn:badges -->", "<!-- /popcorn:badges -->")
 
 
@@ -21,25 +20,6 @@ def _readme() -> Path:
         if candidate.exists():
             return candidate
     raise FileNotFoundError("no README.md found above the popcorn package; pass refresh(readme=...)")
-
-
-def support(records: Iterable[Record], ops: Iterable[str] = ()) -> str:
-    records = list(records)
-    ops = sorted(set(ops) | {record.op for record in records})
-    backends = sorted({record.backend for record in records})
-    grouped = defaultdict(list)
-    for record in records:
-        grouped[record.op, record.backend].append(record)
-    columns = ["kernel", "torch", *backends]
-    lines = ["| " + " | ".join(columns) + " |", "|---|" + ":---:|" * (len(columns) - 1)]
-    for op in ops:
-        cells = ["✔"]
-        for backend in backends:
-            group = grouped[op, backend]
-            passed = sum(record.result.status == "pass" for record in group)
-            cells.append("✘" if not passed else "✔" if passed == len(group) else "✔*")
-        lines.append(f"| `{op}` | " + " | ".join(cells) + " |")
-    return "\n".join(lines)
 
 
 def matrix(records: Iterable[Record]) -> str:
@@ -121,21 +101,15 @@ def _replaced(text: str, markers: tuple[str, str], body: str) -> str:
     return head + f"{start}\n{body}\n{end}" + tail
 
 
-def update_readme(path: Path | str, table: str, badge_row: str | None = None) -> None:
+def update_readme(path: Path | str, badge_row: str) -> None:
     path = Path(path)
-    text = path.read_text() if path.exists() else "# popcorn\n"
-    if all(marker in text for marker in MARKERS):
-        text = _replaced(text, MARKERS, table)
-    else:
-        text = text.rstrip() + "\n\n## Verified backends\n\n" + f"{MARKERS[0]}\n{table}\n{MARKERS[1]}" + "\n"
-    if badge_row is not None and all(marker in text for marker in BADGE_MARKERS):
-        text = _replaced(text, BADGE_MARKERS, badge_row)
-    path.write_text(text)
+    text = path.read_text()
+    if all(marker in text for marker in BADGE_MARKERS):
+        path.write_text(_replaced(text, BADGE_MARKERS, badge_row))
 
 
-def refresh(records: Iterable[Record] | None = None, ops: Iterable[str] = (), readme: Path | str | None = None) -> str:
-    """Regenerate the README support matrix and badges from the bundled reports; returns the detail matrix."""
+def refresh(records: Iterable[Record] | None = None, ops: Mapping[str, Any] = {}, readme: Path | str | None = None) -> str:
+    """Regenerate the README badges from the bundled reports; returns the detail matrix."""
     rows = read(BUNDLED_REPORTS) if records is None else list(records)
-    badge_row = badges(rows, ops) if isinstance(ops, Mapping) else None
-    update_readme(readme if readme is not None else _readme(), support(rows, ops), badge_row)
+    update_readme(readme if readme is not None else _readme(), badges(rows, ops))
     return matrix(rows)

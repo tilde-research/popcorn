@@ -4,6 +4,7 @@ from popcorn.core.constraints import Div, Pow2, Range
 from popcorn.core.dispatcher import KERNELS, Dispatcher, register_kernel
 from popcorn.core.errors import BackendUnavailableError, BackendVersionError, DispatchError, PopcornError, UnvalidatedWarning
 from popcorn.core.sources import declare_backend, kernel
+from popcorn.core.tags import Tag
 from popcorn.core.tuning import Tuner
 
 __all__ = [
@@ -12,6 +13,7 @@ __all__ = [
     "register_kernel",
     "kernel",
     "declare_backend",
+    "Tag",
     "Tuner",
     "Range",
     "Div",

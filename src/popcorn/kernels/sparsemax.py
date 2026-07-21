@@ -2,12 +2,17 @@ import torch
 from jaxtyping import Float, Float16, Float32
 from torch import Tensor
 
-from popcorn import kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
-@register_kernel
+@register_kernel(tags={Tag.ACTIVATION, Tag.REDUCTION})
 def sparsemax(x: Float[Tensor, "... hidden"], dim: int = -1) -> Float[Tensor, "... hidden"]:
-    """Sparse softmax (arXiv:1602.02068): Euclidean projection onto the simplex."""
+    r"""Sparse softmax: the Euclidean projection onto the probability simplex.
+
+    $$y = \operatorname*{arg\,min}_{p \in \Delta}\; \lVert p - x \rVert^2 = \max(x - \tau(x),\, 0)$$
+
+    [Sparsemax (Martins & Astudillo, 2016)](https://arxiv.org/abs/1602.02068)
+    """
     sorted_x, _ = torch.sort(x, dim=dim, descending=True)
     cumulative = sorted_x.cumsum(dim) - 1
     shape = [1] * x.dim()

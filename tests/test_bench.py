@@ -15,7 +15,7 @@ from popcorn.bench import Case, Gauge, compare
 from popcorn.bench.__main__ import cmd_merge, cmd_run, cmd_submit
 from popcorn.bench.grid import cases, make_inputs
 from popcorn.bench.model import Environment, Record, Result
-from popcorn.bench.report import matrix, support
+from popcorn.bench.report import matrix
 from popcorn.bench.store import read, write
 from popcorn.bench.viewer import render
 from popcorn.core import Dispatcher
@@ -205,7 +205,6 @@ def test_concurrent_store_upserts_are_atomic(tmp_path):
 
 def test_reports_and_viewer_consume_typed_records():
     records = [_record(), _record("skip", "other")]
-    assert "| `op` | ✔ | ✔* |" in support(records)
     assert "| op | fast | cpu | 1 | 1 |" in matrix(records)
     assert "No report rows." in render([])
     assert '"schema":2' in render(records)

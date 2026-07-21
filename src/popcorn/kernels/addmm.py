@@ -2,13 +2,14 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
     test_shapes={"rows": {17}, "inner": {16}, "cols": {19}},
     test_args={"alpha": [1.0, 0.5], "beta": [1.0, 0.25]},
+    tags={Tag.LINEAR, Tag.FEATURE_MIXER},
 )
 def addmm(
     x: Float[Tensor, "rows cols"],
@@ -17,7 +18,10 @@ def addmm(
     alpha: float = 1.0,
     beta: float = 1.0,
 ) -> Float[Tensor, "rows cols"]:
-    """Compute `beta * x + alpha * (a @ b)`."""
+    r"""Scaled matrix product accumulated onto a scaled input.
+
+    $$y = \beta x + \alpha \, (a b)$$
+    """
     return torch.addmm(upcast(x), upcast(a), upcast(b), beta=beta, alpha=alpha).to(a.dtype)
 
 

@@ -4,15 +4,20 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
-@register_kernel
+@register_kernel(tags={Tag.ACTIVATION})
 def gelu(
     x: Float[Tensor, "... hidden"],
     approximate: Literal["none", "tanh"] = "none",
 ) -> Float[Tensor, "... hidden"]:
-    """Gaussian Error Linear Unit (arXiv:1606.08415): `x * Phi(x)`, exact or tanh-approximate."""
+    r"""Gaussian Error Linear Unit, exact or tanh-approximate.
+
+    $$y = x \, \Phi(x)$$
+
+    [GELU (Hendrycks & Gimpel, 2016)](https://arxiv.org/abs/1606.08415)
+    """
     return F.gelu(x, approximate=approximate)
 
 

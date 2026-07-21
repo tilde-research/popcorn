@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
@@ -17,9 +17,13 @@ def _strict_lower(A, dims, _generator):
 @register_kernel(
     test_shapes={"batch": {1}, "seq": {16, 23}, "heads": {2}, "block": {16}},
     test_inputs={"A": _strict_lower},
+    tags={Tag.LINEAR},
 )
 def solve_tril(A: Float[Tensor, "batch seq heads block"]) -> Float[Tensor, "batch seq heads block"]:
-    """Invert each block of a chunked unit-lower-triangular matrix."""
+    r"""Invert each block of a chunked unit-lower-triangular matrix.
+
+    $$y_b = \big(I + \mathrm{tril}_{-1}(A_b)\big)^{-1}$$
+    """
     block_size = A.shape[-1]
     chunks = []
     for chunk in upcast(A).split(block_size, 1):

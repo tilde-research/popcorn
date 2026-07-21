@@ -4,18 +4,23 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import rms
 
 
-@register_kernel(test_args={"eps": [1e-6, 1e-5]})
+@register_kernel(test_args={"eps": [1e-6, 1e-5]}, tags={Tag.NORMALIZATION})
 def rms_norm(
     x: Float[Tensor, "... normalized_shape"],
     weight: Float[Tensor, "normalized_shape"],
     bias: Float[Tensor, "normalized_shape"] | None = None,
     eps: float = 1e-6,
 ) -> Float[Tensor, "... normalized_shape"]:
-    """Root-mean-square normalization (arXiv:1910.07467): `x / rms(x) * weight (+ bias)`."""
+    r"""Root-mean-square normalization.
+
+    $$y = \frac{x}{\sqrt{\overline{x^2} + \varepsilon}} \odot w + b$$
+
+    [RMSNorm (Zhang & Sennrich, 2019)](https://arxiv.org/abs/1910.07467)
+    """
     out = rms(x, eps) * weight
     return out if bias is None else out + bias
 

@@ -3,16 +3,17 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
 # q and k pass through the paper's positive feature map (elu + 1) so the
-# normalizer never crosses zero.
+# normalizer never crosses zero; feature-mapped q and k are the caller's job.
 @register_kernel(
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 256), "heads": {4}, "key_dim": {64}, "value_dim": {64}},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"q": lambda t: F.elu(t) + 1, "k": lambda t: F.elu(t) + 1},
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def linear_attn(
     q: Float[Tensor, "batch seq heads key_dim"],
@@ -21,8 +22,12 @@ def linear_attn(
     normalize: bool = True,
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch seq heads value_dim"]:
-    """Causal linear attention (arXiv:2006.16236), optionally normalized by the
-    running key sum. Feature-mapped (positive) q and k are the caller's job."""
+    r"""Causal linear attention, optionally normalized by the running key sum.
+
+    $$S_t = S_{t-1} + k_t v_t^\top, \qquad o_t = c \, q_t^\top S_t$$
+
+    [Transformers are RNNs (Katharopoulos et al., 2020)](https://arxiv.org/abs/2006.16236)
+    """
     scale = default_scale(softmax_scale, q.shape[-1])
     q32, k32 = upcast(q) * scale, upcast(k)
     scores = torch.einsum("bqhk,bjhk->bhqj", q32, k32).tril()

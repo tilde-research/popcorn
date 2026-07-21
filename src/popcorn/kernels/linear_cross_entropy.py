@@ -4,10 +4,12 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32, Int
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 
 
-@register_kernel(test_shapes={"vocab": Range(2, 4096)}, test_args={"label_smoothing": [0.0, 0.1]})
+@register_kernel(
+    test_shapes={"vocab": Range(2, 4096)}, test_args={"label_smoothing": [0.0, 0.1]}, tags={Tag.LOSS, Tag.LINEAR, Tag.FUSED}
+)
 def linear_cross_entropy(
     x: Float[Tensor, "tokens hidden"],
     weight: Float[Tensor, "vocab hidden"],
@@ -17,7 +19,10 @@ def linear_cross_entropy(
     label_smoothing: float = 0.0,
     reduction: Literal["mean", "sum"] = "mean",
 ) -> Float[Tensor, ""]:
-    """Cross entropy fused with the lm-head projection."""
+    r"""Cross entropy fused with the lm-head projection, never materializing the logits.
+
+    $$\mathcal{L}_t = -\log \operatorname{softmax}(x_t w^\top + b)_{y_t}$$
+    """
     return F.cross_entropy(
         F.linear(x, weight, bias),
         labels,

@@ -2,7 +2,7 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, register_kernel
+from popcorn import Range, Tag, register_kernel
 
 
 def _rotate_half(x):
@@ -16,11 +16,12 @@ def _table(f):
 
 
 # mrope_section must sum to head_dim / 2; singleton test pools keep the grid
-# consistent.
+# consistent. cos/sin are constants, matching liger.
 @register_kernel(
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 512), "heads": {4}, "kv_heads": {2}, "head_dim": {32}},
     test_args={"mrope_section": [[8, 4, 4]]},
     test_inputs={"cos": _table(torch.cos), "sin": _table(torch.sin)},
+    tags={Tag.POSITIONAL},
 )
 def qwen2vl_mrope(
     q: Float[Tensor, "batch heads seq head_dim"],
@@ -29,9 +30,12 @@ def qwen2vl_mrope(
     sin: Float[Tensor, "3 batch seq head_dim"],
     mrope_section: list,
 ) -> tuple[Float[Tensor, "batch heads seq head_dim"], Float[Tensor, "batch kv_heads seq head_dim"]]:
-    """Qwen2-VL multimodal rotary embedding (arXiv:2409.12191): the temporal,
-    height, and width position tables are interleaved per `mrope_section`;
-    `cos`/`sin` are constants, matching liger."""
+    r"""Multimodal rotary embedding: temporal, height, and width tables interleaved per section.
+
+    $$y = x \odot \tilde{\cos}_t + \mathrm{rot}_{1/2}(x) \odot \tilde{\sin}_t$$
+
+    [Qwen2-VL (Wang et al., 2024)](https://arxiv.org/abs/2409.12191)
+    """
     doubled = [*mrope_section, *mrope_section]
     cos = torch.cat([m[i % 3] for i, m in enumerate(cos.detach().split(doubled, -1))], -1)[:, None]
     sin = torch.cat([m[i % 3] for i, m in enumerate(sin.detach().split(doubled, -1))], -1)[:, None]

@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
@@ -11,6 +11,7 @@ from popcorn.kernels._utils import default_scale, upcast
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 128), "heads": {4}, "key_dim": {64}, "value_dim": {64}},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"w": F.logsigmoid},
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def rwkv6(
     r: Float[Tensor, "batch seq heads key_dim"],
@@ -20,8 +21,13 @@ def rwkv6(
     u: Float[Tensor, "heads key_dim"],
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch seq heads value_dim"]:
-    """RWKV-6 (arXiv:2404.05892): linear attention with data-dependent per-key
-    log decay `w` and a bonus weight `u` for the current token."""
+    r"""RWKV-6: linear attention with data-dependent per-key decay and a current-token bonus.
+
+    $$o_t = c \, r_t^\top \big(S_{t-1} + \mathrm{diag}(u) \, k_t v_t^\top\big),
+    \qquad S_t = \mathrm{diag}\!\big(e^{w_t}\big) S_{t-1} + k_t v_t^\top$$
+
+    [Eagle and Finch (Peng et al., 2024)](https://arxiv.org/abs/2404.05892)
+    """
     scale = default_scale(softmax_scale, r.shape[-1])
     r32, k32, v32, w32, u32 = map(upcast, (r, k, v, w, u))
     state = r32.new_zeros(r.shape[0], r.shape[2], r.shape[3], v.shape[3])

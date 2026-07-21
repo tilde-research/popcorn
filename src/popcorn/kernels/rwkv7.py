@@ -3,10 +3,12 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
+# `a` is the in-context erase direction (unit norm, negative) and `b` its
+# replacement.
 @register_kernel(
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 128), "heads": {4}, "key_dim": {64}, "value_dim": {64}},
     test_args={"softmax_scale": [1.0, 0.25]},
@@ -15,6 +17,7 @@ from popcorn.kernels._utils import upcast
         "a": lambda t: -F.normalize(t, dim=-1),
         "b": lambda t: 0.5 * F.normalize(t, dim=-1),
     },
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def rwkv7(
     r: Float[Tensor, "batch seq heads key_dim"],
@@ -25,9 +28,13 @@ def rwkv7(
     b: Float[Tensor, "batch seq heads key_dim"],
     softmax_scale: float = 1.0,
 ) -> Float[Tensor, "batch seq heads value_dim"]:
-    """RWKV-7 (arXiv:2503.14456): S_t = S_{t-1} diag(exp(w_t)) + S_{t-1} a_t b_t^T + k_t v_t^T,
-    the diagonal-plus-low-rank transition; `a` is the in-context erase
-    direction (unit norm, negative) and `b` its replacement."""
+    r"""RWKV-7: a diagonal-plus-low-rank state transition with in-context erase and replace.
+
+    $$S_t = \mathrm{diag}\!\big(e^{w_t}\big) S_{t-1} + b_t \big(S_{t-1}^\top a_t\big)^\top + k_t v_t^\top,
+    \qquad o_t = c \, r_t^\top S_t$$
+
+    [RWKV-7 "Goose" (Peng et al., 2025)](https://arxiv.org/abs/2503.14456)
+    """
     r32, w32, k32, v32, a32, b32 = map(upcast, (r, w, k, v, a, b))
     state = r32.new_zeros(r.shape[0], r.shape[2], r.shape[3], v.shape[3])
     outs = []

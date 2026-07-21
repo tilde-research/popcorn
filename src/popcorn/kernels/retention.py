@@ -2,13 +2,14 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
 @register_kernel(
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 256), "heads": {4}, "key_dim": {64}, "value_dim": {64}},
     test_args={"softmax_scale": [None, 0.25]},
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def retention(
     q: Float[Tensor, "batch seq heads key_dim"],
@@ -16,8 +17,13 @@ def retention(
     v: Float[Tensor, "batch seq heads value_dim"],
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch seq heads value_dim"]:
-    """Multi-scale retention (arXiv:2307.08621): causal linear attention with a
-    fixed per-head exponential decay 1 - 2^-(5 + head)."""
+    r"""Multi-scale retention: causal linear attention with a fixed per-head exponential decay.
+
+    $$S_t = \gamma_h S_{t-1} + k_t v_t^\top, \qquad o_t = c \, q_t^\top S_t,
+    \qquad \gamma_h = 1 - 2^{-5-h}$$
+
+    [Retentive Network (Sun et al., 2023)](https://arxiv.org/abs/2307.08621)
+    """
     dtype = q.dtype
     q, k, v = map(upcast, (q, k, v))
     heads, seq = q.shape[2], q.shape[1]

@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
@@ -17,6 +17,8 @@ def _fla_supported(q, k, v, block_size, softmax_scale):
     return q.shape[2] % k.shape[2] == 0 and groups >= 16 and power_of_two and k.shape[1] == blocks
 
 
+# A compressed block becomes visible at the token that completes it. Rows
+# before the first complete block return zero output and zero log-sum-exp.
 @register_kernel(
     test_shapes={
         "batch": Range(1, 4),
@@ -29,6 +31,7 @@ def _fla_supported(q, k, v, block_size, softmax_scale):
     },
     test_args={"block_size": [32], "softmax_scale": [None, 0.25]},
     test_inputs={"k": lambda t: F.normalize(t, dim=-1)},
+    tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION},
 )
 def nsa_compression(
     q: Float[Tensor, "batch seq heads key_dim"],
@@ -40,10 +43,12 @@ def nsa_compression(
     Float[Tensor, "batch seq heads value_dim"],
     Float32[Tensor, "batch seq heads"],
 ]:
-    """Causal NSA attention over pre-compressed key/value blocks.
+    r"""Causal NSA attention over pre-compressed kv blocks; returns output and log-sum-exp.
 
-    A compressed block becomes visible at the token that completes it. Rows
-    before the first complete block return zero output and zero log-sum-exp.
+    $$y_t = \sum_{j \,:\, (j+1) B \,\le\, t+1} p_{tj} \, v_j,
+    \qquad p_t = \operatorname{softmax}\big(c \, q_t k^\top\big)$$
+
+    [Native Sparse Attention (Yuan et al., 2025)](https://arxiv.org/abs/2502.11089)
     """
     scale = default_scale(softmax_scale, k.shape[-1])
     q32, k32, v32 = map(upcast, (q, k, v))

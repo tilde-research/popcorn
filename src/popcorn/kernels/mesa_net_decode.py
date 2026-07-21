@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
@@ -34,6 +34,7 @@ def _log_decay(t):
         "prev_h_kk": _rank_one_state,
         "prev_h_kv": lambda t: 0.1 * t,
     },
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def mesa_net_decode(
     q: Float[Tensor, "batch heads key_dim"],
@@ -50,7 +51,12 @@ def mesa_net_decode(
     Float[Tensor, "batch heads key_dim key_dim"],
     Float[Tensor, "batch heads key_dim value_dim"],
 ]:
-    """One MesaNet decode step with explicit recurrent statistics and CG solve."""
+    r"""One MesaNet decode step with explicit recurrent statistics and a conjugate-gradient solve.
+
+    $$o = G^\top \big(H + \mathrm{diag}(\lambda)\big)^{-1} q$$
+
+    [MesaNet (von Oswald et al., 2025)](https://arxiv.org/abs/2506.05233)
+    """
     q32, k32, v32, g32, lamb32, beta32, h_kk, h_kv = map(
         upcast,
         (q, k, v, g, lamb, beta, prev_h_kk, prev_h_kv),

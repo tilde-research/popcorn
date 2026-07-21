@@ -2,14 +2,17 @@ import torch
 from jaxtyping import Float, Float32, Int
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
+# Returns (per-token loss, optional KL, clipping indicator), matching Liger's
+# GrpoLossFunction.
 @register_kernel(
     test_shapes={"batch": Range(1, 8), "resp": {31}, "resp_plus": {32}, "vocab": Range(2, 4096)},
     test_args={"temperature": [0.9], "beta": [0.0, 0.04], "eps_low": [0.2], "eps_high": [0.4]},
     test_inputs={"completion_mask": lambda t: (t > 0).float()},
+    tags={Tag.LOSS, Tag.FUSED},
 )
 def grpo_offpolicy(
     logits: Float[Tensor, "batch resp_plus vocab"],
@@ -27,8 +30,13 @@ def grpo_offpolicy(
     Float32[Tensor, "batch resp"] | None,
     Float32[Tensor, "batch resp"],
 ]:
-    """Clipped off-policy GRPO loss. Returns per-token loss, optional KL, and
-    the clipping indicator, matching Liger's `GrpoLossFunction`."""
+    r"""Clipped off-policy GRPO loss with a KL penalty against the reference policy.
+
+    $$\mathcal{L}_t = -\min\!\big(r_t A,\; \mathrm{clip}(r_t, 1 - \epsilon_{\mathrm{lo}}, 1 + \epsilon_{\mathrm{hi}}) A\big)
+    + \beta \big(e^{\delta_t} - \delta_t - 1\big), \qquad r_t = e^{\ell_t - \ell^{\mathrm{old}}_t}$$
+
+    [GRPO (Shao et al., 2024)](https://arxiv.org/abs/2402.03300)
+    """
     logp = (upcast(logits[:, :-1]) / temperature).log_softmax(-1)
     logp = logp.gather(-1, completion_ids[..., None]).squeeze(-1)
     ratio = (logp - upcast(old_logp).detach()).exp()

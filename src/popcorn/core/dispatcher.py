@@ -21,12 +21,19 @@ from popcorn.core.errors import DispatchError
 from popcorn.core.fingerprint import SCOPES, fingerprint
 from popcorn.core.library import bind_torch_op
 from popcorn.core.sources import bound_kernel, ensure_available, resolve, unavailable_reason
+from popcorn.core.tags import Tag
 from popcorn.core.tuning import Tuner
 from popcorn.core.typecheck import matches, narrows
 
 KERNELS: dict[str, Dispatcher] = {}
 
 _BACKEND_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*(:[a-z0-9][a-z0-9_-]*)?$")
+
+# The reference docstring contract (see CONTRIBUTING): a one-line summary, one
+# $$...$$ block, and an optional comma-separated list of [label](url) links.
+# Everything below the summary is markdown, rendered verbatim on kernel cards.
+DOC_FORMAT = re.compile(r"\A(?P<summary>[^\n]+?\.)\n\n\$\$(?P<math>.+?)\$\$(?:\n\n(?P<citations>\[.+?\)))?\s*\Z", re.DOTALL)
+_LINK = re.compile(r"\[(?P<label>[^\]]+)\]\((?P<url>https://[^)\s]+)\)")
 
 
 def _takes_context(transform: Callable[..., Any]) -> bool:
@@ -217,6 +224,7 @@ class Dispatcher:
         test_args: Mapping[str, Any] | None = None,
         test_inputs: Mapping[str, Callable[..., Any]] | None = None,
         name: str | None = None,
+        tags: set[Tag] | frozenset[Tag] | None = None,
     ) -> None:
         # identity: look like the reference to introspection
         self.reference = reference
@@ -247,6 +255,9 @@ class Dispatcher:
             raise TypeError(f"{self.name}: test_inputs values must be callable: {invalid}")
         self._contextual_inputs = frozenset(name for name, transform in self.test_inputs.items() if _takes_context(transform))
 
+        # card metadata
+        self.tags = frozenset(tags or ())
+
         # dispatch state
         self.torch_op: Any = None  # torch.library binding, set by bind_torch_op
         self._backends: list[Backend] = [Backend(self, "torch", adapter=reference)]
@@ -261,6 +272,26 @@ class Dispatcher:
     def fingerprint(self) -> str | None:
         """Digest of the reference; a changed reference invalidates every record of the op."""
         return fingerprint(self.reference)
+
+    @cached_property
+    def _doc(self) -> re.Match[str] | None:
+        return DOC_FORMAT.fullmatch(inspect.getdoc(self.reference) or "")
+
+    @property
+    def summary(self) -> str | None:
+        """The docstring's one-line description."""
+        return self._doc.group("summary") if self._doc else None
+
+    @property
+    def math(self) -> str | None:
+        """The docstring's LaTeX definition, without the $$ fences."""
+        return self._doc.group("math").strip() if self._doc else None
+
+    @property
+    def citations(self) -> tuple[tuple[str, str], ...]:
+        """(label, url) pairs from the docstring's citation links."""
+        block = self._doc.group("citations") if self._doc else None
+        return tuple((match["label"], match["url"]) for match in _LINK.finditer(block)) if block else ()
 
     def __call__(
         self,
@@ -440,6 +471,7 @@ def register_kernel(
     test_args: Mapping[str, Any] | None = None,
     test_inputs: Mapping[str, Callable[..., Any]] | None = None,
     name: str | None = None,
+    tags: set[Tag] | frozenset[Tag] | None = None,
 ) -> Callable[[Callable[..., Any]], Dispatcher]: ...
 
 
@@ -450,9 +482,12 @@ def register_kernel(
     test_args: Mapping[str, Any] | None = None,
     test_inputs: Mapping[str, Callable[..., Any]] | None = None,
     name: str | None = None,
+    tags: set[Tag] | frozenset[Tag] | None = None,
 ) -> Dispatcher | Callable[[Callable[..., Any]], Dispatcher]:
     def wrap(reference: Callable[..., Any]) -> Dispatcher:
-        dispatcher = Dispatcher(reference, test_shapes=test_shapes, test_args=test_args, test_inputs=test_inputs, name=name)
+        dispatcher = Dispatcher(
+            reference, test_shapes=test_shapes, test_args=test_args, test_inputs=test_inputs, name=name, tags=tags
+        )
         if dispatcher.name in KERNELS:
             raise ValueError(f"kernel {dispatcher.name!r} already registered")
         KERNELS[dispatcher.name] = dispatcher

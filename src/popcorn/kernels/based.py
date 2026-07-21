@@ -2,13 +2,14 @@ import torch
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
 @register_kernel(
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 256), "heads": {4}, "key_dim": {16}, "value_dim": {64}},
     test_args={"softmax_scale": [None, 0.25]},
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def based(
     q: Float[Tensor, "batch seq heads key_dim"],
@@ -17,8 +18,13 @@ def based(
     use_norm: bool = True,
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch seq heads value_dim"]:
-    """Based linear attention (arXiv:2402.18668): a second-order Taylor
-    approximation of softmax, 1 + qk + (qk)^2 / 2."""
+    r"""Based linear attention: a second-order Taylor approximation of the softmax kernel.
+
+    $$a_{ts} = 1 + q_t^\top k_s + \tfrac{1}{2} \big(q_t^\top k_s\big)^2, \qquad
+    o_t = \frac{\sum_{s \le t} a_{ts} v_s}{\sum_{s \le t} a_{ts}}$$
+
+    [Based (Arora et al., 2024)](https://arxiv.org/abs/2402.18668)
+    """
     scale = default_scale(softmax_scale, q.shape[-1])
     scores = torch.einsum("bqhk,bjhk->bhqj", upcast(q) * scale, upcast(k))
     attn = (1 + scores + 0.5 * scores.square()).tril()

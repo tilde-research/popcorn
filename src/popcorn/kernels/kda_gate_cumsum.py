@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
@@ -11,6 +11,7 @@ from popcorn.kernels._utils import upcast
     test_shapes={"batch": {1}, "seq": {9}, "heads": {2}, "width": {16}},
     test_args={"chunk_size": [4], "scale": [None, 0.5], "lower_bound": [None, -5.0]},
     test_inputs={"A_log": lambda x: x * 0.1, "dt_bias": lambda x: x * 0.1},
+    tags={Tag.ACTIVATION, Tag.REDUCTION, Tag.FUSED},
 )
 def kda_gate_cumsum(
     g: Float[Tensor, "batch seq heads width"],
@@ -20,7 +21,12 @@ def kda_gate_cumsum(
     dt_bias: Float[Tensor, "heads width"] | None = None,
     lower_bound: float | None = None,
 ) -> Float[Tensor, "batch seq heads width"]:
-    """Apply the KDA gate transform, then a chunk-local inclusive cumsum."""
+    r"""The KDA gate transform followed by a chunk-local inclusive cumsum.
+
+    $$y_t = s \sum_{u = cC}^{t} \mathrm{gate}(g_u), \qquad t \in \text{chunk } c$$
+
+    [Kimi Linear (Kimi Team, 2025)](https://arxiv.org/abs/2510.26692)
+    """
     g32 = upcast(g)
     if dt_bias is not None:
         g32 = g32 + upcast(dt_bias)

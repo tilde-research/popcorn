@@ -4,10 +4,11 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 
 
-@register_kernel(test_shapes={"vocab": Range(2, 4096)})
+# The target branch is a constant, matching fla.
+@register_kernel(test_shapes={"vocab": Range(2, 4096)}, tags={Tag.LOSS, Tag.LINEAR, Tag.FUSED})
 def linear_kl_div(
     x: Float[Tensor, "tokens hidden"],
     target_x: Float[Tensor, "tokens target_hidden"],
@@ -15,8 +16,11 @@ def linear_kl_div(
     target_weight: Float[Tensor, "vocab target_hidden"],
     reduction: Literal["batchmean"] = "batchmean",
 ) -> Float[Tensor, ""]:
-    """KL(target || student) between lm-head outputs, fused with both
-    projections; the target branch is a constant, matching fla."""
+    r"""KL divergence between student and constant target lm-head outputs, fused with both projections.
+
+    $$\mathcal{L} = \frac{1}{T} \sum_t \mathrm{KL}\!\Big(
+    \operatorname{softmax}\!\big(u_t w_u^\top\big) \,\Big\|\, \operatorname{softmax}\!\big(x_t w^\top\big)\Big)$$
+    """
     log_p = F.linear(x, weight).log_softmax(-1)
     log_q = F.linear(target_x, target_weight).log_softmax(-1).detach()
     return (log_q.exp() * (log_q - log_p)).sum() / x.shape[0]

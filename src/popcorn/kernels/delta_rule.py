@@ -3,14 +3,16 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
+# Keys should be unit-norm for stability.
 @register_kernel(
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 128), "heads": {4}, "key_dim": {64}, "value_dim": {64}},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"k": lambda t: F.normalize(t, dim=-1), "beta": torch.sigmoid},
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def delta_rule(
     q: Float[Tensor, "batch seq heads key_dim"],
@@ -19,8 +21,12 @@ def delta_rule(
     beta: Float[Tensor, "batch seq heads"],
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch seq heads value_dim"]:
-    """DeltaNet (arXiv:2406.06484): S_t = S_{t-1}(I - beta_t k_t k_t^T) + beta_t k_t v_t^T.
-    Keys should be unit-norm for stability."""
+    r"""DeltaNet: a linear-attention state updated by the error-correcting delta rule.
+
+    $$S_t = \big(I - \beta_t k_t k_t^\top\big) S_{t-1} + \beta_t k_t v_t^\top, \qquad o_t = c \, q_t^\top S_t$$
+
+    [DeltaNet (Yang et al., 2024)](https://arxiv.org/abs/2406.06484)
+    """
     scale = default_scale(softmax_scale, q.shape[-1])
     q32, k32, v32, beta32 = map(upcast, (q, k, v, beta))
     state = q32.new_zeros(q.shape[0], q.shape[2], q.shape[3], v.shape[3])

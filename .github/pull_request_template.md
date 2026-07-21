@@ -26,6 +26,6 @@
 
 - [ ] `uv run pytest tests -q` green, `scripts/format.sh` leaves no diff
 - [ ] Full grid run for every op touched: zero fail, crash, error, or benchmark error
-- [ ] `src/popcorn/reports/*.jsonl` rows committed, README matrix and badges regenerated (`scripts/update_readme.py`)
+- [ ] `src/popcorn/reports/*.jsonl` rows committed, README badges regenerated (`scripts/update_readme.py`)
 - [ ] Version pins in `declare_backend` and the pyproject extra match what I tested
 - [ ] New library: added to the README Acknowledgement list; adapted code credits its origin in the header comment

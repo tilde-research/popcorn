@@ -313,19 +313,34 @@ class TestRegistration:
                 (name, inspect.Parameter.KEYWORD_ONLY, None) for name in ("backend", "bench", "validate")
             ], f"{op.name}: __signature__ must expose the reference params plus the dispatch controls"
 
-    def test_readme_matrix_covers_every_kernel(self):
-        import re
-
+    def test_kernel_doc_format(self):
         import popcorn.kernels  # noqa: F401
         from popcorn import KERNELS
+        from popcorn.core.dispatcher import _LINK
 
-        text = (Path(__file__).parents[1] / "README.md").read_text()
-        block = text.split("<!-- popcorn:matrix -->", 1)[1].split("<!-- /popcorn:matrix -->", 1)[0]
-        rows = set(re.findall(r"^\| `(\w+)` \|", block, re.M))
-        assert rows == set(KERNELS), (
-            "README matrix out of date; run scripts/update_readme.py "
-            f"(missing: {sorted(set(KERNELS) - rows)}, stale: {sorted(rows - set(KERNELS))})"
-        )
+        for op in KERNELS.values():
+            doc = inspect.getdoc(op.reference) or ""
+            assert op._doc, (
+                f"{op.name}: docstring must be `summary.` + blank line + `$$math$$` [+ citations] (see CONTRIBUTING)"
+            )
+            assert op.summary is not None and len(op.summary) <= 100, f"{op.name}: summary must fit one line (<=100 chars)"
+            assert "`" not in op.summary, f"{op.name}: no inline formulas in the summary; the math block owns the formula"
+            math = op.math or ""
+            assert math.count("{") == math.count("}"), f"{op.name}: unbalanced braces in math"
+            stripped = _LINK.sub("", op._doc.group("citations") or "")
+            assert set(stripped) <= set(", \n"), f"{op.name}: citations must be comma-separated [label](https://...) links"
+            assert "arxiv" not in _LINK.sub("", doc).lower(), f"{op.name}: cite arXiv only as a link in the citations block"
+            for label, _ in op.citations:
+                assert not label.startswith("http"), f"{op.name}: citation labels are names, not URLs"
+
+    def test_kernel_tags(self):
+        import popcorn.kernels  # noqa: F401
+        from popcorn import KERNELS, Tag
+
+        for op in KERNELS.values():
+            assert op.tags, f"{op.name}: declare at least one tag from core/tags.py"
+        unworn = set(Tag) - {tag for op in KERNELS.values() for tag in op.tags}
+        assert not unworn, f"unused tags in core/tags.py: {sorted(t.name for t in unworn)} — remove them or tag a kernel"
 
     def test_params_must_match_reference(self):
         op = make_op()

@@ -5,17 +5,20 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import register_kernel
+from popcorn import Tag, register_kernel
 from popcorn.kernels._utils import upcast
 
 
-@register_kernel(test_shapes={"rows": {17}, "inner": {16}, "cols": {19}})
+@register_kernel(test_shapes={"rows": {17}, "inner": {16}, "cols": {19}}, tags={Tag.LINEAR, Tag.FEATURE_MIXER})
 def matmul(
     a: Float[Tensor, "rows inner"],
     b: Float[Tensor, "inner cols"],
     activation: Literal["", "leaky_relu", "relu", "sigmoid", "tanh"] = "",
 ) -> Float[Tensor, "rows cols"]:
-    """Matrix product with FLA's optional fused activation."""
+    r"""Matrix product with an optional fused activation.
+
+    $$y = \mathrm{act}(a b)$$
+    """
     out = upcast(a) @ upcast(b)
     if activation == "leaky_relu":
         out = F.leaky_relu(out, negative_slope=0.01)

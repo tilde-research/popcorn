@@ -2,13 +2,16 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Pow2, kernel, register_kernel
+from popcorn import Pow2, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
-@register_kernel(test_shapes={"dim": Pow2()}, test_args={"scale": [1.0, 0.5]})
+@register_kernel(test_shapes={"dim": Pow2()}, test_args={"scale": [1.0, 0.5]}, tags={Tag.LINEAR})
 def hadamard_transform(x: Float[Tensor, "... dim"], scale: float = 1.0) -> Float[Tensor, "... dim"]:
-    """Sylvester Hadamard transform along the last dimension (`dim` a power of two)."""
+    r"""Sylvester Hadamard transform along the last dimension (a power of two).
+
+    $$y = s \, x H_d, \qquad H_{2d} = \begin{pmatrix} H_d & H_d \\ H_d & -H_d \end{pmatrix}$$
+    """
     xw = upcast(x)
     matrix = torch.ones(1, 1, dtype=xw.dtype, device=x.device)
     while matrix.shape[-1] < x.shape[-1]:

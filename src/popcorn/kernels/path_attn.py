@@ -3,14 +3,18 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float16
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
+# The optional log forget gate `g` is added before scaling, i.e.
+# softmax((qk + gate) * scale), following the fla kernel. `w` should be
+# unit-norm, `beta` in [0, 2].
 @register_kernel(
     test_shapes={"batch": Range(1, 4), "seq": Range(2, 128), "heads": {4}, "kv_heads": {2}, "head_dim": {64}},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"w": lambda t: F.normalize(t, dim=-1), "beta": lambda t: 2 * torch.sigmoid(t), "g": F.logsigmoid},
+    tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION, Tag.POSITIONAL},
 )
 def path_attn(
     q: Float[Tensor, "batch seq heads head_dim"],
@@ -21,11 +25,13 @@ def path_attn(
     g: Float[Tensor, "batch seq heads"] | None = None,
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch seq heads head_dim"]:
-    """PaTH attention (arXiv:2505.16381): before each query, every earlier key is
-    reflected by the accumulated Householder products (I - beta_t w_t w_t^T), so
-    query t sees H_t...H_{s+1} k_s; then causal softmax with an optional log
-    forget gate `g`. The gate is added before scaling, i.e. softmax((qk + gate)
-    * scale), following the fla kernel. `w` should be unit-norm, `beta` in [0, 2]."""
+    r"""Causal attention where keys are position-encoded by accumulated Householder reflections.
+
+    $$s_{ts} = q_t \big(H_t \cdots H_{s+1} k_s\big)^\top,
+    \qquad H_t = I - \beta_t w_t w_t^\top$$
+
+    [PaTH Attention (Yang et al., 2025)](https://arxiv.org/abs/2505.16381)
+    """
     seq, scale = q.shape[1], default_scale(softmax_scale, q.shape[-1])
     groups = q.shape[2] // k.shape[2]
     q32 = upcast(q)

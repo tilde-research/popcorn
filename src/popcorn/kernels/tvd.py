@@ -3,20 +3,24 @@ from typing import Literal
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 
 
+# q is the target and treated as a constant, matching liger.
 @register_kernel(
     test_shapes={"vocab": Range(2, 4096)},
     test_inputs={"p": lambda t: t.softmax(-1), "q": lambda t: t.softmax(-1)},
+    tags={Tag.LOSS},
 )
 def tvd(
     p: Float[Tensor, "tokens vocab"],
     q: Float[Tensor, "tokens vocab"],
     reduction: Literal["mean", "sum", "batchmean", "none"] = "mean",
 ) -> Float[Tensor, ""]:
-    """Total variation distance between two distributions; `q` is the target
-    and treated as a constant, matching the liger kernel."""
+    r"""Total variation distance to a constant target distribution.
+
+    $$\mathcal{L} = \tfrac{1}{2} \lVert p - q \rVert_1$$
+    """
     distance = 0.5 * (p - q.detach()).abs()
     if reduction == "none":
         return distance

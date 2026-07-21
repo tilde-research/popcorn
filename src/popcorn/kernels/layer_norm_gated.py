@@ -5,10 +5,10 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 
 
-@register_kernel(test_args={"eps": [1e-6, 1e-5]})
+@register_kernel(test_args={"eps": [1e-6, 1e-5]}, tags={Tag.NORMALIZATION, Tag.ACTIVATION, Tag.FUSED})
 def layer_norm_gated(
     x: Float[Tensor, "... hidden"],
     g: Float[Tensor, "... hidden"],
@@ -17,7 +17,10 @@ def layer_norm_gated(
     activation: Literal["swish", "sigmoid"] = "swish",
     eps: float = 1e-6,
 ) -> Float[Tensor, "... hidden"]:
-    """Layer norm times a swish or sigmoid gate: `LN(x) * act(g)`."""
+    r"""Layer norm scaled by a swish or sigmoid gate.
+
+    $$y = \mathrm{LN}_{w,b}(x) \odot \mathrm{act}(g)$$
+    """
     out = F.layer_norm(x, weight.shape, weight, bias, eps)
     return out * (F.silu(g) if activation == "swish" else torch.sigmoid(g))
 

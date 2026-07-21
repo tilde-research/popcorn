@@ -2,7 +2,7 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 
 
 def generalized_jsd(log_p, log_q, beta):
@@ -17,18 +17,23 @@ def generalized_jsd(log_p, log_q, beta):
     return beta * p * log_q + (1 - beta) * q * log_p - m * torch.log(m)
 
 
+# log_q is the teacher and treated as a constant, matching liger.
 @register_kernel(
     test_shapes={"vocab": Range(2, 4096)},
     test_args={"beta": [0.0, 0.5, 1.0]},
     test_inputs={"log_p": lambda t: t.log_softmax(-1), "log_q": lambda t: t.log_softmax(-1)},
+    tags={Tag.LOSS},
 )
 def jsd(
     log_p: Float[Tensor, "tokens vocab"],
     log_q: Float[Tensor, "tokens vocab"],
     beta: float = 0.5,
 ) -> Float[Tensor, ""]:
-    """Generalized JSD averaged over tokens; `log_q` is the teacher and treated
-    as a constant, matching liger."""
+    r"""Generalized Jensen-Shannon divergence between student and constant teacher log-probs.
+
+    $$\mathcal{L} = \frac{1}{T} \sum_t \mathrm{JSD}_\beta(p_t \,\|\, q_t),
+    \qquad \mathrm{JSD}_0 = \mathrm{KL}(q \,\|\, p), \quad \mathrm{JSD}_1 = \mathrm{KL}(p \,\|\, q)$$
+    """
     return generalized_jsd(log_p, log_q.detach(), beta).sum() / log_p.shape[0]
 
 

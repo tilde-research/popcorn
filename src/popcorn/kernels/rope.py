@@ -2,7 +2,7 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, register_kernel
+from popcorn import Range, Tag, register_kernel
 
 
 def _rotate_half(x):
@@ -14,6 +14,8 @@ def _table(f):
     return lambda t: f(t).chunk(2, -1)[0].repeat(1, 1, 2)
 
 
+# The frequency tables may have one batch or match `q`, and duplicate their
+# first half.
 @register_kernel(
     test_shapes={
         "batch": Range(1, 8),
@@ -24,6 +26,7 @@ def _table(f):
         "head_dim": {32},
     },
     test_inputs={"cos": _table(torch.cos), "sin": _table(torch.sin)},
+    tags={Tag.POSITIONAL},
 )
 def rope(
     q: Float[Tensor, "batch heads seq head_dim"],
@@ -31,8 +34,12 @@ def rope(
     cos: Float[Tensor, "cos_batch seq head_dim"],
     sin: Float[Tensor, "cos_batch seq head_dim"],
 ) -> tuple[Float[Tensor, "batch heads seq head_dim"], Float[Tensor, "batch kv_heads seq head_dim"]]:
-    """Paired Llama-style rotary embedding. The frequency tables may have one
-    batch or match `q` and duplicate their first half."""
+    r"""Paired Llama-style rotary embedding of queries and keys.
+
+    $$y = x \odot \cos_t + \mathrm{rot}_{1/2}(x) \odot \sin_t, \qquad x \in \{q, k\}$$
+
+    [RoFormer (Su et al., 2021)](https://arxiv.org/abs/2104.09864)
+    """
     cos, sin = cos.detach()[:, None], sin.detach()[:, None]
     return q * cos + _rotate_half(q) * sin, k * cos + _rotate_half(k) * sin
 

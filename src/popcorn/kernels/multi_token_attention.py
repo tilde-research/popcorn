@@ -5,13 +5,14 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
     test_shapes={"batch": Range(1, 8), "channels": {4}, "channels_out": {4}, "seq": Range(8, 128), "ksize": {5}},
     test_args={"padding": [0, 2]},
+    tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION, Tag.FUSED},
 )
 def multi_token_attention(
     scores: Float[Tensor, "batch channels seq seq"],
@@ -20,9 +21,12 @@ def multi_token_attention(
     padding: int = 0,
     sparse: Literal[False] = False,
 ) -> Float[Tensor, "batch channels_out seq2 seq2"]:
-    """Multi-token attention (arXiv:2504.00927): causal softmax over raw scores,
-    a conv2d mixing attention maps across heads and positions, then re-masking
-    the future to zero."""
+    r"""Causal softmax over raw scores, a conv2d mixing attention maps, then re-masking the future.
+
+    $$y = \mathrm{mask}_0\!\Big(\mathrm{conv2d}\big(\operatorname{softmax}(\mathrm{mask}_{-\infty}(s)),\, w, b\big)\Big)$$
+
+    [Multi-Token Attention (Golovneva et al., 2025)](https://arxiv.org/abs/2504.00927)
+    """
     causal = torch.ones(scores.shape[-2:], dtype=torch.bool, device=scores.device).triu(1)
     probs = upcast(scores).masked_fill(causal, -1e9).softmax(-1).to(scores.dtype)
     out = F.conv2d(probs, weight, bias, padding=padding)

@@ -1,16 +1,19 @@
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 # quack also ships a softmax, but it is strictly 2-D and its backward
 # miscompiles on plain contiguous inputs; see ISSUES.md.
 
 
-@register_kernel
+@register_kernel(tags={Tag.ACTIVATION, Tag.REDUCTION})
 def softmax(x: Float[Tensor, "... hidden"]) -> Float[Tensor, "... hidden"]:
-    """Softmax over the last dimension."""
+    r"""Softmax over the last dimension.
+
+    $$y_i = \frac{e^{x_i}}{\sum_j e^{x_j}}$$
+    """
     return upcast(x).softmax(-1).to(x.dtype)
 
 

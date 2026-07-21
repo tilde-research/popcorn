@@ -42,9 +42,13 @@ def _scoped(value: Target) -> bool:
 
 
 def _normalized(target: Target) -> ast.Module:
-    """Dedented source parsed with docstrings dropped; comments never reach the AST."""
+    """Dedented source parsed with docstrings and decorators dropped; comments
+    never reach the AST. Decorators carry registration metadata (test grids,
+    sources, tags), not the code the benchmark measured."""
     tree = ast.parse(textwrap.dedent(inspect.getsource(target)))
     for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            node.decorator_list.clear()
         body = getattr(node, "body", None)  # Lambda/IfExp bodies are single expressions, not lists
         if isinstance(body, list) and body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
             if isinstance(body[0].value.value, str):

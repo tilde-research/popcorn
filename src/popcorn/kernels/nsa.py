@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
@@ -47,9 +47,18 @@ def _masked_softmax(scores, valid):
 # block is selected and the case is deterministic: with more blocks than slots
 # the top-k pick is discrete, and near-ties resolve differently between a
 # kernel and any reference, so parity is only defined given the same selection.
+#
+# Compression attends to mean-pooled kv blocks, each visible once complete;
+# selection attends token-causally inside the `block_count` blocks ranked by
+# the compression softmax (block 0 and the two most recent are always kept,
+# ranking is gradient-free); the sliding window covers the trailing
+# `window_size` positions (branch skipped when 0, `g_swa` unused). Kernels
+# require grouping `heads` a multiple of `16 * kv_heads`, and `block_count`
+# at most half of `block_size` (fla `parallel_nsa`).
 @register_kernel(
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 512), "heads": {16}, "kv_heads": {1}, "head_dim": {64}},
     test_args={"block_count": [16], "block_size": [32], "window_size": [0, 64], "softmax_scale": [None, 0.25]},
+    tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION, Tag.FUSED},
 )
 def nsa(
     q: Float[Tensor, "batch seq heads head_dim"],
@@ -63,15 +72,15 @@ def nsa(
     window_size: int = 0,
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch seq heads head_dim"]:
-    """Native sparse attention (arXiv:2502.11089): three gated branches over
-    shared kv. Compression attends to mean-pooled kv blocks, each visible once
-    complete; selection attends token-causally inside the `block_count` blocks
-    ranked by the compression softmax (block 0 and the two most recent are
-    always kept, ranking is gradient-free); the sliding window covers the
-    trailing `window_size` positions (branch skipped when 0, `g_swa` unused).
-    Kernels require grouping `heads` a multiple of `16 * kv_heads`, and
-    `block_count` at most half of `block_size` (fla `parallel_nsa`,
-    github.com/tilde-research/nsa-release)."""
+    r"""Native sparse attention: gated compression, selection, and sliding-window branches.
+
+    $$y = g_{\mathrm{cmp}} \odot \mathrm{Attn}(q, \tilde{k}, \tilde{v})
+    + g_{\mathrm{slc}} \odot \mathrm{Attn}_{\mathcal{S}}(q, k, v)
+    + g_{\mathrm{swa}} \odot \mathrm{Attn}_{W}(q, k, v)$$
+
+    [Native Sparse Attention (Yuan et al., 2025)](https://arxiv.org/abs/2502.11089),
+    [nsa-release](https://github.com/tilde-research/nsa-release)
+    """
     scale = default_scale(softmax_scale, q.shape[-1])
     q32, k32, v32 = map(upcast, (q, k, v))
     batch, seq, heads, _ = q.shape

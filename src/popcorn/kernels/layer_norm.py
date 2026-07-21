@@ -2,17 +2,22 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 
 
-@register_kernel(test_args={"eps": [1e-6, 1e-5]})
+@register_kernel(test_args={"eps": [1e-6, 1e-5]}, tags={Tag.NORMALIZATION})
 def layer_norm(
     x: Float[Tensor, "... normalized_shape"],
     weight: Float[Tensor, "normalized_shape"],
     bias: Float[Tensor, "normalized_shape"] | None = None,
     eps: float = 1e-6,
 ) -> Float[Tensor, "... normalized_shape"]:
-    """Layer normalization (arXiv:1607.06450): standardize the last dim, then scale and shift."""
+    r"""Layer normalization: standardize the last dim, then scale and shift.
+
+    $$y = \frac{x - \overline{x}}{\sqrt{\operatorname{Var}(x) + \varepsilon}} \odot w + b$$
+
+    [Layer Normalization (Ba et al., 2016)](https://arxiv.org/abs/1607.06450)
+    """
     return F.layer_norm(x, weight.shape, weight, bias, eps)
 
 

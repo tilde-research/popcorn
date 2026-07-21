@@ -2,13 +2,14 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
     test_shapes={"batch": {1}, "first": {9}, "second": {9}, "width": {16}},
     test_args={"scale": [None, 0.5]},
+    tags={Tag.REDUCTION},
 )
 def chunk_global_cumsum(
     s: Float[Tensor, "batch first second width"],
@@ -16,7 +17,10 @@ def chunk_global_cumsum(
     scale: float | None = None,
     head_first: bool = False,
 ) -> Float[Tensor, "batch first second width"]:
-    """Inclusive sequence-wide cumsum in either FLA layout."""
+    r"""Inclusive sequence-wide cumsum in either FLA layout, optionally reversed and scaled.
+
+    $$y_t = c \sum_{u \le t} s_u$$
+    """
     axis = 2 if head_first else 1
     s32 = upcast(s)
     if reverse:

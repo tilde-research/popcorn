@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
@@ -11,6 +11,7 @@ from popcorn.kernels._utils import default_scale, upcast
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 128), "heads": {4}, "key_dim": {64}, "value_dim": {64}},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"k": lambda t: F.normalize(t, dim=-1), "beta": torch.sigmoid, "g": F.logsigmoid},
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def gated_delta_rule(
     q: Float[Tensor, "batch seq heads key_dim"],
@@ -20,8 +21,13 @@ def gated_delta_rule(
     beta: Float[Tensor, "batch seq heads"],
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch seq heads value_dim"]:
-    """Gated DeltaNet (arXiv:2412.06464): the delta rule with a per-head log
-    forget gate `g` applied to the state each step."""
+    r"""The delta rule with a per-head log forget gate applied to the state each step.
+
+    $$S_t = e^{g_t} \big(I - \beta_t k_t k_t^\top\big) S_{t-1} + \beta_t k_t v_t^\top,
+    \qquad o_t = c \, q_t^\top S_t$$
+
+    [Gated DeltaNet (Yang et al., 2024)](https://arxiv.org/abs/2412.06464)
+    """
     scale = default_scale(softmax_scale, q.shape[-1])
     q32, k32, v32, g32, beta32 = map(upcast, (q, k, v, g, beta))
     state = q32.new_zeros(q.shape[0], q.shape[2], q.shape[3], v.shape[3])

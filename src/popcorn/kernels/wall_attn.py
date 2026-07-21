@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 RCP_LN2 = 1.4426950408889634
@@ -27,6 +27,7 @@ def _wall_deps(**_):
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 512), "heads": {4}, "kv_heads": {2}, "head_dim": {64}},
     test_args={"softmax_scale": [None, 0.25], "window_size": [None, 128]},
     test_inputs={"g": F.logsigmoid, "g_scalar": F.logsigmoid, "sink_bias": lambda t: t * 0.1},
+    tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION},
 )
 def wall_attn(
     q: Float[Tensor, "batch seq heads head_dim"],
@@ -38,11 +39,13 @@ def wall_attn(
     softmax_scale: float | None = None,
     window_size: int | None = None,
 ) -> Float[Tensor, "batch seq heads head_dim"]:
-    """Wall attention: causal attention whose logit for a query/key pair carries a
-    per-channel multiplicative decay. With the log2-space prefix `P = cumsum(g)`,
-    the score is `scale * sum_c q_c k_c exp2(P_query_c - P_key_c)`; `g_scalar` adds a
-    FoX-style scalar gate and `sink_bias` an attention sink. Grouped kv heads as in
-    `attn` (github.com/tilde-research/wall-attention-release)."""
+    r"""Causal attention with per-channel decay on every logit, optional scalar gate and sink.
+
+    $$s_{ij} = c \sum_{d} q_{id} \, k_{jd} \, 2^{P_{id} - P_{jd}}, \qquad P = \mathrm{cumsum}(g)$$
+
+    [Wall Attention](https://github.com/tilde-research/wall-attention-release),
+    [Forgetting Transformer (Lin et al., 2025)](https://arxiv.org/abs/2503.02130)
+    """
     scale = default_scale(softmax_scale, q.shape[-1]) * RCP_LN2
     q32, k32, v32, g32 = map(upcast, (q, k, v, g))
     groups = q.shape[2] // k.shape[2]

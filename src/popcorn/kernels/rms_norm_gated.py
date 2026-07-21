@@ -5,11 +5,11 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import rms
 
 
-@register_kernel(test_args={"eps": [1e-6, 1e-5]})
+@register_kernel(test_args={"eps": [1e-6, 1e-5]}, tags={Tag.NORMALIZATION, Tag.ACTIVATION, Tag.FUSED})
 def rms_norm_gated(
     x: Float[Tensor, "... hidden"],
     g: Float[Tensor, "... hidden"],
@@ -18,7 +18,10 @@ def rms_norm_gated(
     activation: Literal["swish", "sigmoid"] = "swish",
     eps: float = 1e-6,
 ) -> Float[Tensor, "... hidden"]:
-    """RMS norm times a swish or sigmoid gate: `RMSNorm(x) * act(g)`."""
+    r"""RMS norm scaled by a swish or sigmoid gate.
+
+    $$y = \left(\frac{x}{\sqrt{\overline{x^2} + \varepsilon}} \odot w + b\right) \odot \mathrm{act}(g)$$
+    """
     out = rms(x, eps) * weight
     out = out if bias is None else out + bias
     return out * (F.silu(g) if activation == "swish" else torch.sigmoid(g))

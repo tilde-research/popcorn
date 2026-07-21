@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
@@ -13,9 +13,12 @@ def _state(s):
     return torch.stack((alpha, F.softplus(beta), eps), 1)
 
 
+# The effective decay is -exp(w); the running numerator, denominator, and
+# their shared log offset travel in `state`, matching fla.
 @register_kernel(
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 128), "chans": Range(8, 1024)},
     test_inputs={"state": _state},
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def rwkv4(
     w: Float[Tensor, "chans"],
@@ -24,10 +27,13 @@ def rwkv4(
     v: Float[Tensor, "batch seq chans"],
     state: Float[Tensor, "batch 3 1 chans"],
 ) -> tuple[Float[Tensor, "batch seq chans"], Float[Tensor, "batch 3 1 chans"]]:
-    """RWKV-4 wkv (arXiv:2305.13048): a per-channel exponential moving average
-    over `v` weighted by `exp(k)`, with bonus `u` for the current token and raw
-    decay `w` (the effective decay is `-exp(w)`). The running numerator,
-    denominator, and their shared log offset travel in `state`, matching fla."""
+    r"""RWKV-4 wkv: a per-channel EMA of values weighted by exp(k), with a current-token bonus.
+
+    $$o_t = \frac{a_{t-1} + e^{u + k_t} v_t}{b_{t-1} + e^{u + k_t}},
+    \qquad a_t = e^{-e^{w}} a_{t-1} + e^{k_t} v_t, \quad b_t = e^{-e^{w}} b_{t-1} + e^{k_t}$$
+
+    [RWKV (Peng et al., 2023)](https://arxiv.org/abs/2305.13048)
+    """
     dtype = k.dtype
     w, u, k, v, state = map(upcast, (w, u, k, v, state))
     decay = -w.exp()

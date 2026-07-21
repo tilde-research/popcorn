@@ -2,7 +2,7 @@ import torch
 from jaxtyping import Int8, Int32
 from torch import Tensor
 
-from popcorn import Div, Range, kernel, register_kernel
+from popcorn import Div, Range, Tag, kernel, register_kernel
 
 
 def _int8_input(tensor, _dims, generator):
@@ -16,12 +16,16 @@ def _int2_input(tensor, _dims, generator):
 @register_kernel(
     test_shapes={"rows": Range(1, 128), "inner": {512}, "cols": Range(1, 128)},
     test_inputs={"a": _int8_input, "b": _int2_input},
+    tags={Tag.LINEAR, Tag.QUANTIZED},
 )
 def int8_int2_matmul(
     a: Int8[Tensor, "rows inner"],
     b: Int8[Tensor, "inner cols"],
 ) -> Int32[Tensor, "rows cols"]:
-    """Integer matrix product with int8 activations and ternary int2 weights."""
+    r"""Integer matrix product with int8 activations and ternary int2 weights.
+
+    $$y = a b, \qquad a \in \mathbb{Z}_{\mathrm{int8}}, \; b \in \{-1, 0, 1\}$$
+    """
     products = a.to(torch.int32).unsqueeze(-1) * b.to(torch.int32).unsqueeze(0)
     return products.sum(dim=1, dtype=torch.int32)
 

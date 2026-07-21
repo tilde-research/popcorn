@@ -2,13 +2,18 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import register_kernel
+from popcorn import Tag, register_kernel
 from popcorn.impls import cuda_toolkit
 
 
-@register_kernel
+@register_kernel(tags={Tag.ACTIVATION, Tag.FEATURE_MIXER, Tag.FUSED})
 def swiglu(a: Float[Tensor, "... hidden"], b: Float[Tensor, "... hidden"]) -> Float[Tensor, "... hidden"]:
-    """SwiGLU gating (arXiv:2002.05202): `silu(a) * b`."""
+    r"""SwiGLU gating.
+
+    $$y = \mathrm{silu}(a) \odot b$$
+
+    [GLU Variants Improve Transformer (Shazeer, 2020)](https://arxiv.org/abs/2002.05202)
+    """
     return F.silu(a) * b
 
 

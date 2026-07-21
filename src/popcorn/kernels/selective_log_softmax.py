@@ -2,7 +2,7 @@ import torch
 from jaxtyping import Bool, Float, Float32, Int
 from torch import Tensor
 
-from popcorn import Range, register_kernel
+from popcorn import Range, Tag, register_kernel
 from popcorn.kernels._utils import upcast
 
 
@@ -12,6 +12,7 @@ from popcorn.kernels._utils import upcast
     test_shapes={"batch": Range(1, 8), "response": {31}, "response_plus": {32}, "vocab": Range(2, 4096)},
     test_args={"temperature": [0.9, 1.0]},
     test_inputs={"mask": lambda t: t.bool()},
+    tags={Tag.REDUCTION, Tag.FUSED},
 )
 def selective_log_softmax(
     logits: Float[Tensor, "batch response_plus vocab"],
@@ -19,7 +20,10 @@ def selective_log_softmax(
     temperature: float = 0.9,
     mask: Bool[Tensor, "batch response"] | None = None,
 ) -> Float32[Tensor, "batch response"]:
-    """Selected next-token log probabilities, computed in float32."""
+    r"""Next-token log probabilities of the selected ids, computed in float32.
+
+    $$y_t = \frac{x_{t, i_t}}{\tau} - \log \sum_v e^{x_{t, v} / \tau}$$
+    """
     scaled = upcast(logits[:, :-1]) / temperature
     selected = scaled.gather(-1, input_ids[..., None]).squeeze(-1)
     log_probs = selected - torch.logsumexp(scaled, dim=-1)

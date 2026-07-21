@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
@@ -11,6 +11,7 @@ from popcorn.kernels._utils import default_scale, upcast
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 128), "heads": {4}, "key_dim": {64}, "value_dim": {64}},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"g": F.logsigmoid},
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def gla(
     q: Float[Tensor, "batch seq heads key_dim"],
@@ -19,8 +20,12 @@ def gla(
     g: Float[Tensor, "batch seq heads key_dim"],
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch seq heads value_dim"]:
-    """Gated linear attention (arXiv:2312.06635) with a per-key-dimension log
-    forget gate `g`."""
+    r"""Gated linear attention with a per-key-dimension log forget gate.
+
+    $$S_t = \mathrm{diag}\!\big(e^{g_t}\big) \, S_{t-1} + k_t v_t^\top, \qquad o_t = c \, q_t^\top S_t$$
+
+    [Gated Linear Attention (Yang et al., 2023)](https://arxiv.org/abs/2312.06635)
+    """
     scale = default_scale(softmax_scale, q.shape[-1])
     q32, k32, v32, gate = map(upcast, (q, k, v, g))
     state = q32.new_zeros(q.shape[0], q.shape[2], q.shape[3], v.shape[3])

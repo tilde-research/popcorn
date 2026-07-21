@@ -2,13 +2,15 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
+# The decay slope shrinks with layer depth, matching fla's derivation.
 @register_kernel(
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 256), "heads": {4}, "key_dim": {64}, "value_dim": {64}},
     test_args={"layer_idx": [0, 1], "num_layers": [2], "softmax_scale": [None, 0.25]},
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def lightning_attn(
     q: Float[Tensor, "batch seq heads key_dim"],
@@ -18,8 +20,12 @@ def lightning_attn(
     num_layers: int,
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch seq heads value_dim"]:
-    """Lightning attention (arXiv:2405.17381): linear attention whose per-head
-    decay slope shrinks with layer depth, matching fla's derivation."""
+    r"""Lightning attention: linear attention with a fixed per-head, per-layer decay slope.
+
+    $$S_t = e^{-\lambda_h} S_{t-1} + k_t v_t^\top, \qquad o_t = c \, q_t^\top S_t$$
+
+    [Lightning Attention (Qin et al., 2024)](https://arxiv.org/abs/2405.17381)
+    """
     dtype = q.dtype
     q, k, v = map(upcast, (q, k, v))
     heads, seq = q.shape[2], q.shape[1]

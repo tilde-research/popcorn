@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
@@ -14,6 +14,7 @@ from popcorn.kernels._utils import upcast
 @register_kernel(
     test_shapes={"batch": Range(1, 8), "seq": {64}, "levels": {7}, "heads": {1}, "key_dim": {64}, "value_dim": {64}},
     test_inputs={"g": F.logsigmoid, "level_scales": torch.sigmoid},
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def log_linear_attn(
     q: Float[Tensor, "batch seq heads key_dim"],
@@ -22,8 +23,13 @@ def log_linear_attn(
     g: Float[Tensor, "batch seq heads"],
     level_scales: Float[Tensor, "batch seq heads levels"],
 ) -> Float[Tensor, "batch seq heads value_dim"]:
-    """Log-linear attention (arXiv:2506.04761): gated linear attention through a
-    hierarchical (H-matrix) mask with one learned scale per power-of-two level."""
+    r"""Gated linear attention through a hierarchical mask, one learned scale per log2 level.
+
+    $$o_t = \sum_{s \le t} \lambda_{t,\ell(t,s)} \, e^{D_t - D_s} \big(q_t^\top k_s\big) v_s,
+    \qquad D = \mathrm{cumsum}(g)$$
+
+    [Log-Linear Attention (Guo et al., 2025)](https://arxiv.org/abs/2506.04761)
+    """
     seq = q.shape[1]
     lower = torch.ones(seq, seq, dtype=torch.bool, device=q.device).tril()
     decay = upcast(g).transpose(1, 2).cumsum(-1)

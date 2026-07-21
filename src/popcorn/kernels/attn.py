@@ -4,12 +4,13 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float16
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 
 
 @register_kernel(
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 512), "heads": {4}, "kv_heads": {2}, "head_dim": {64}},
     test_args={"softmax_scale": [None, 0.25]},
+    tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION},
 )
 def attn(
     q: Float[Tensor, "batch seq heads head_dim"],
@@ -18,7 +19,14 @@ def attn(
     causal: bool = False,
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch seq heads head_dim"]:
-    """Multi-head attention with grouped kv heads (heads must divide evenly)."""
+    r"""Multi-head attention with grouped kv heads (heads must divide evenly).
+
+    $$y = \operatorname{softmax}\!\left(\frac{q k^\top}{\sqrt{d}} + M\right) v$$
+
+    [Attention Is All You Need (Vaswani et al., 2017)](https://arxiv.org/abs/1706.03762),
+    [FlashAttention (Dao et al., 2022)](https://arxiv.org/abs/2205.14135),
+    [GQA (Ainslie et al., 2023)](https://arxiv.org/abs/2305.13245)
+    """
     return F.scaled_dot_product_attention(
         q.transpose(1, 2),
         k.transpose(1, 2),

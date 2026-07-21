@@ -2,10 +2,12 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
-@register_kernel(test_args={"eps": [1e-6, 1e-5]})
+@register_kernel(
+    test_args={"eps": [1e-6, 1e-5]}, tags={Tag.NORMALIZATION, Tag.ACTIVATION, Tag.LINEAR, Tag.FUSED, Tag.FEATURE_MIXER}
+)
 def layer_norm_swish_linear(
     x: Float[Tensor, "... hidden"],
     g: Float[Tensor, "... hidden"],
@@ -15,7 +17,10 @@ def layer_norm_swish_linear(
     linear_bias: Float[Tensor, "out_features"] | None = None,
     eps: float = 1e-6,
 ) -> Float[Tensor, "... out_features"]:
-    """Layer norm, swish gate, then linear: `linear(LN(x) * silu(g))`."""
+    r"""Layer norm, swish gate, then a linear projection, in one fused op.
+
+    $$y = \big(\mathrm{LN}_{w_n, b_n}(x) \odot \mathrm{silu}(g)\big) \, w_l^\top + b_l$$
+    """
     h = F.layer_norm(x, norm_weight.shape, norm_weight, norm_bias, eps) * F.silu(g)
     return F.linear(h, linear_weight, linear_bias)
 

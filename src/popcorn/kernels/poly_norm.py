@@ -2,19 +2,24 @@ import torch
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
-@register_kernel(test_args={"eps": [1e-6, 1e-5]})
+@register_kernel(test_args={"eps": [1e-6, 1e-5]}, tags={Tag.NORMALIZATION, Tag.ACTIVATION})
 def poly_norm(
     x: Float[Tensor, "... hidden"],
     weight: Float[Tensor, "3"],
     bias: Float[Tensor, ""],
     eps: float = 1e-6,
 ) -> Float[Tensor, "... hidden"]:
-    """PolyNorm (arXiv:2411.03884): y = w0*norm(x^3) + w1*norm(x^2) + w2*norm(x) + b,
-    where norm(u) = u * rsqrt(mean(u^2) + eps) over the last dimension."""
+    r"""Polynomial composition of RMS-normalized powers of the input.
+
+    $$y = w_0\,\mathrm{n}(x^3) + w_1\,\mathrm{n}(x^2) + w_2\,\mathrm{n}(x) + b,
+    \qquad \mathrm{n}(u) = \frac{u}{\sqrt{\overline{u^2} + \varepsilon}}$$
+
+    [PolyNorm (Zhuo et al., 2024)](https://arxiv.org/abs/2411.03884)
+    """
     h = upcast(x)
     powers = [h**3, h**2, h]
     normed = [u * torch.rsqrt(u.pow(2).mean(-1, keepdim=True) + eps) for u in powers]

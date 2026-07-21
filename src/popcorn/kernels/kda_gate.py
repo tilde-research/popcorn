@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
@@ -27,6 +27,7 @@ def _fla_supported(g, A_log, dt_bias, lower_bound):
         "A_log": lambda t: (F.softplus(t) + 1).log(),
         "dt_bias": lambda t: 0.1 * t,
     },
+    tags={Tag.ACTIVATION},
 )
 def kda_gate(
     g: Float[Tensor, "batch seq heads key_dim"],
@@ -34,10 +35,12 @@ def kda_gate(
     dt_bias: Float[Tensor, "gate_dim"] | None = None,
     lower_bound: float | None = None,
 ) -> Float32[Tensor, "batch seq heads key_dim"]:
-    """KDA's per-dimension log forget gate.
+    r"""KDA's per-dimension log forget gate transform.
 
-    The default branch is ``-exp(A_log) * softplus(g + dt_bias)``. With a
-    lower bound, it is ``lower_bound * sigmoid(exp(A_log) * (g + dt_bias))``.
+    $$y = -e^{A} \operatorname{softplus}(g + b)
+    \quad \text{or, bounded,} \quad y = L \, \sigma\!\big(e^{A} (g + b)\big)$$
+
+    [Kimi Linear (Kimi Team, 2025)](https://arxiv.org/abs/2510.26692)
     """
     heads, key_dim = g.shape[-2:]
     gate = upcast(g)

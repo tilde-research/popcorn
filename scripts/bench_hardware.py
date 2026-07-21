@@ -3,7 +3,7 @@
 
 Thin wrapper over `python -m popcorn.bench run`: every registered op (or the
 ones you name) against every available backend, upserting into the bundled
-reports and regenerating the README support matrix. All `run` flags pass
+reports and regenerating the README badges. All `run` flags pass
 through, e.g.:
 
     scripts/bench_hardware.py                     # everything, 10 reps

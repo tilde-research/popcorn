@@ -69,25 +69,47 @@ Ops live in `src/popcorn/kernels/<op>.py`, one file per op. Libraries are declar
 Create `src/popcorn/kernels/<op>.py` with a pure-torch reference and decorate it:
 
 ```python
-@register_kernel(test_shapes={"normalized_shape": Range(64, 8192)}, test_args={"eps": [1e-6, 1e-5]})
+@register_kernel(
+    test_shapes={"normalized_shape": Range(64, 8192)},
+    test_args={"eps": [1e-6, 1e-5]},
+    tags={Tag.NORMALIZATION},
+)
 def rms_norm(
     x: Float[Tensor, "... normalized_shape"],
     weight: Float[Tensor, "normalized_shape"],
     bias: Float[Tensor, "normalized_shape"] | None = None,
     eps: float = 1e-6,
 ) -> Float[Tensor, "... normalized_shape"]:
-    """Root-mean-square normalization (arXiv:1910.07467): `x / rms(x) * weight (+ bias)`."""
+    r"""Root-mean-square normalization.
+
+    $$y = \frac{x}{\sqrt{\overline{x^2} + \varepsilon}} \odot w + b$$
+
+    [RMSNorm (Zhang & Sennrich, 2019)](https://arxiv.org/abs/1910.07467)
+    """
     ...
 ```
 
-`@register_kernel(fn, *, test_shapes=None, test_args=None, test_inputs=None, name=None)`
+`@register_kernel(fn, *, test_shapes=None, test_args=None, test_inputs=None, name=None, tags=None)`
 
 - `test_shapes`: `{dim: Range | set}`, replaces the default size grid for that dim
 - `test_args`: `{scalar: [values]}` to grid over; scalars without an entry derive their pool from a `Literal` annotation, `bool`, or the default
 - `test_inputs`: `{tensor param: transform}` applied to the raw random draw when the op needs structured inputs (probabilities, log-space gates, normalized keys). A 1-arg transform gets the draw; a 3-arg transform gets `(draw, dims, generator)` for inputs built from the case dims, e.g. `cu_seqlens` offsets (see `src/popcorn/kernels/_varlen.py`)
 - `name`: op name, defaults to the function name
+- `tags`: a set of `Tag` members classifying the op; most kernels wear several
 
-The reference is the contract: jaxtyping annotations on every tensor and return, plain or `Literal` annotations on scalars (default value first), every default declared here, differentiable, and half precision upcast for reductions. Every reference carries a short docstring: what the op computes, with the formula or paper. Single-tensor returns also get a `torch.ops.popcorn` binding. No branching on backends or devices. `test_shapes` and `test_args` generate the grid only; runtime validation comes from exact report rows.
+The reference is the contract: jaxtyping annotations on every tensor and return, plain or `Literal` annotations on scalars (default value first), every default declared here, differentiable, and half precision upcast for reductions. Single-tensor returns also get a `torch.ops.popcorn` binding. No branching on backends or devices. `test_shapes` and `test_args` generate the grid only; runtime validation comes from exact report rows.
+
+### The docstring
+
+Every reference docstring follows one format, enforced by `test_kernel_doc_format` and parsed into `op.summary` / `op.math` / `op.citations` — everything below the summary is plain markdown, rendered verbatim on the kernel's card:
+
+- **Summary**: one line, ≤100 chars, ending in a period. Pure prose — no formulas, no citations.
+- **Math**: after a blank line, exactly one `$$...$$` block defining what the op computes. Symbols mirror the parameter names (`weight` → `w`), the output is `y` (recurrent ops write the state recurrence and readout, `S_t`, `o_t`; losses write `\mathcal{L}`), `\odot` is elementwise product, `\varepsilon` is `eps`, `\overline{\cdot}` is a mean over the normalized dim. Use `r"""` so backslashes survive.
+- **Citations** (optional): after a blank line, a comma-separated list of markdown links, wrapping after commas when long. Cite the work that defines the op first, then seminal algorithmic works central to why the kernel exists (`attn` cites FlashAttention). Labels are `Work (FirstAuthor et al., year)` for papers, the bare project name for repos; any https URL is fine. Code-level provenance stays with `source=` and the "Adapted from" comments in `impls/`.
+
+### Tags
+
+All tags live in `src/popcorn/core/tags.py` — read it before tagging, and add a new tag there and only there when none fits. That single file is what prevents near-duplicate tags; the tests reject untagged kernels and unworn tags in both directions.
 
 > [!TIP]
 > Op name: snake_case, the established torch/literature name (`rms_norm`, never `liger_rms`). Reference function: named exactly the op. Shapes: lowercase descriptive names, torch's where torch has them (`normalized_shape`, `vocab`, `tokens`); `...` for batch dims. Scalars: torch's parameter names (`eps`, `ignore_index`); booleans default `False`. One op, one meaning: semantic switches are separate ops, not flags.
@@ -197,7 +219,7 @@ uv run python -m popcorn.bench submit [ops...] [--array 8] [--reps 10] [--limit 
 uv run python -m popcorn.bench view [--user] [--out index.html]
 ```
 
-`scripts/bench_hardware.py` wraps `run` for the common case: the full grid for every op on the current machine, then a README matrix regen. `scripts/update_readme.py` regenerates the matrix without running anything.
+`scripts/bench_hardware.py` wraps `run` for the common case: the full grid for every op on the current machine, then a README badge regen. `scripts/update_readme.py` regenerates the badges without running anything.
 
 To compare an unregistered callable first:
 
@@ -209,7 +231,7 @@ result = compare(mine, reference, {"x": x, "weight": weight})
 
 `compare` consumes concrete named inputs, checks forward and backward against fp64 truth, then times both callables. It owns no registry or persistence.
 
-`run` executes the op's full grid (shapes x args x dtypes x batch ranks x optional-tensor presence), forward and backward. Correctness is completed before timing; a timing failure is recorded separately and never overwrites a correctness pass. `--reps` controls seeded comparisons and timed repetitions; `--limit` takes one deterministic per-op sample shared by every backend; `--shard I/K` selects one contiguous slice. Rows atomically upsert into `src/popcorn/reports/<op>.jsonl` by exact case, gradient requirement, hardware, Torch version, and backend version. `run` and `merge` regenerate the README matrix automatically.
+`run` executes the op's full grid (shapes x args x dtypes x batch ranks x optional-tensor presence), forward and backward. Correctness is completed before timing; a timing failure is recorded separately and never overwrites a correctness pass. `--reps` controls seeded comparisons and timed repetitions; `--limit` takes one deterministic per-op sample shared by every backend; `--shard I/K` selects one contiguous slice. Rows atomically upsert into `src/popcorn/reports/<op>.jsonl` by exact case, gradient requirement, hardware, Torch version, and backend version. `run` and `merge` regenerate the README badges automatically.
 
 `submit` runs that grid as a slurm array. `--array` caps the shard count, `--qos` and `--time` set scheduling (`--qos` is omitted from the script when unset), and `--dry-run` only writes the script. The dependent merge fails if any shard file is missing. `view` renders the database as a self-contained HTML report; `--user` folds in your local cache rows.
 
@@ -221,14 +243,14 @@ result = compare(mine, reference, {"x": x, "weight": weight})
 | crash | the implementation raised during correctness | see the reason column |
 | error | harness or worker failure, correctness unknown | fix the harness or rerun |
 
-A successful row may also have `bench_error`; correctness remains valid, but the timing must be rerun. In the support matrix, ✔ means every tested case passes, ✔* means at least one passes while another is gated, failed, or unverified, and ✘ means no case passes.
+A successful row may also have `bench_error`; correctness remains valid, but the timing must be rerun. In the detail matrix printed by `scripts/update_readme.py`, ✔ means every tested case passes, ✔* means at least one passes while another is gated, failed, or unverified, and ✘ means no case passes.
 
 `op.validate(*args, backend=None, **kwargs)` checks a real call without timing. `op.benchmark(*args, backend=None, **kwargs)` checks and times it. These APIs write `${POPCORN_CACHE_DIR:-${XDG_CACHE_HOME:-~/.cache}/popcorn}/v2/reports` and never modify checked-in reports or the README.
 
 At runtime, a selected optimized backend with no exact row emits `UnvalidatedWarning` once. `POPCORN_VALIDATE=1` synchronously validates missing rows before dispatch; `POPCORN_BENCH=1` also times them and selects the exact fastest backend. The first call may compile every eligible implementation. Do not hide this warning in library code; callers can use `warnings.filterwarnings`.
 
 > [!TIP]
-> Commit `src/popcorn/reports/*.jsonl`; they are the bundled database that tunes dispatch on contributor hardware. Reports and the README matrix are machine-written, never edit them by hand. User-local cache rows are not committed.
+> Commit `src/popcorn/reports/*.jsonl`; they are the bundled database that tunes dispatch on contributor hardware. Reports and the README badges are machine-written, never edit them by hand. User-local cache rows are not committed.
 
 > [!NOTE]
 > → Zero fail, zero crash, zero error, and zero benchmark error: [6. Submit](#6-submit)
@@ -239,7 +261,7 @@ At runtime, a selected optimized backend with no exact row emits `UnvalidatedWar
 
 - [ ] `uv run pytest tests -q` green, `scripts/format.sh` leaves no diff
 - [ ] full grid run for every op you touched: zero fail, crash, error, or benchmark error
-- [ ] `src/popcorn/reports/*.jsonl` rows for your hardware committed, README matrix regenerated (`scripts/update_readme.py`)
+- [ ] `src/popcorn/reports/*.jsonl` rows for your hardware committed, README badges regenerated (`scripts/update_readme.py`)
 - [ ] version pins in `declare_backend` and the pyproject extra match what you tested
 - [ ] PR description: op + backend, hardware, and the matrix row (pass/skip counts, speedups)
 

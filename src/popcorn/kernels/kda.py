@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float16
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
@@ -11,6 +11,7 @@ from popcorn.kernels._utils import default_scale, upcast
     test_shapes={"batch": Range(1, 8), "seq": Range(2, 128), "heads": {4}, "key_dim": {64}, "value_dim": {64}},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"k": lambda t: F.normalize(t, dim=-1), "beta": torch.sigmoid, "g": F.logsigmoid},
+    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def kda(
     q: Float[Tensor, "batch seq heads key_dim"],
@@ -20,8 +21,13 @@ def kda(
     beta: Float[Tensor, "batch seq heads"],
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch seq heads value_dim"]:
-    """Kimi Delta Attention (arXiv:2510.26692): the delta rule with a
-    per-key-dimension log forget gate `g`."""
+    r"""Kimi Delta Attention: the delta rule with a per-key-dimension log forget gate.
+
+    $$S_t = \mathrm{diag}\!\big(e^{g_t}\big) S_{t-1}
+    + \beta_t k_t \big(v_t - S_{t-1}^\top k_t\big)^\top, \qquad o_t = c \, q_t^\top S_t$$
+
+    [Kimi Linear (Kimi Team, 2025)](https://arxiv.org/abs/2510.26692)
+    """
     scale = default_scale(softmax_scale, q.shape[-1])
     q32, k32, v32, g32, beta32 = map(upcast, (q, k, v, g, beta))
     state = q32.new_zeros(q.shape[0], q.shape[2], q.shape[3], v.shape[3])

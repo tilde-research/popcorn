@@ -3,12 +3,15 @@ from typing import Literal
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 
 
+# x is in log space, target in probability space (log space if log_target);
+# target is a constant, matching liger.
 @register_kernel(
     test_shapes={"vocab": Range(2, 4096)},
     test_inputs={"x": lambda t: t.log_softmax(-1), "target": lambda t: t.softmax(-1)},
+    tags={Tag.LOSS},
 )
 def kl_div(
     x: Float[Tensor, "tokens vocab"],
@@ -17,8 +20,10 @@ def kl_div(
     log_target: bool = False,
     eps: float = 1e-10,
 ) -> Float[Tensor, "..."]:
-    """KL(target || x) with `x` in log-space and `target` in probability space
-    (log space if `log_target`); `target` is a constant, matching liger."""
+    r"""KL divergence from log-space inputs to a constant target distribution.
+
+    $$\mathcal{L} = \mathrm{KL}(q \,\|\, p) = \sum_i q_i \big(\log q_i - \log p_i\big)$$
+    """
     target = target.detach()
     loss = target.exp() * (target - x) if log_target else target * (target.clamp(min=eps).log() - x)
     if reduction == "none":

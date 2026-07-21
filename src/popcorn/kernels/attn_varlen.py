@@ -6,14 +6,17 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float16, Int32
 from torch import Tensor
 
-from popcorn import Range, kernel, register_kernel
+from popcorn import Range, Tag, kernel, register_kernel
 from popcorn.kernels._varlen import cuts
 
 
+# Sequences are packed along `total` in the flash-attention varlen layout,
+# delimited by cu_seqlens offsets. Grouped kv heads as in `attn`.
 @register_kernel(
     test_shapes={"total": Range(8, 2048), "boundaries": Range(2, 9), "heads": {4}, "kv_heads": {2}, "head_dim": {64}},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"cu_seqlens": cuts},
+    tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION, Tag.VARLEN},
 )
 def attn_varlen(
     q: Float[Tensor, "total heads head_dim"],
@@ -23,8 +26,12 @@ def attn_varlen(
     causal: bool = False,
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "total heads head_dim"]:
-    """Attention over sequences packed along `total`, delimited by `cu_seqlens`
-    offsets (flash-attention varlen layout). Grouped kv heads as in `attn`."""
+    r"""Attention over packed variable-length sequences, each attended independently.
+
+    $$y^{(s)} = \operatorname{softmax}\!\left(\frac{q^{(s)} {k^{(s)}}^\top}{\sqrt{d}} + M\right) v^{(s)}$$
+
+    [FlashAttention (Dao et al., 2022)](https://arxiv.org/abs/2205.14135)
+    """
     return torch.cat(
         [
             F.scaled_dot_product_attention(
