@@ -21,6 +21,8 @@ def rms_norm_gated(
     r"""RMS norm scaled by a swish or sigmoid gate.
 
     $$y = \left(\frac{x}{\sqrt{\overline{x^2} + \varepsilon}} \odot w + b\right) \odot \mathrm{act}(g)$$
+
+    [RMSNorm (Zhang & Sennrich, 2019)](https://arxiv.org/abs/1910.07467)
     """
     out = rms(x, eps) * weight
     out = out if bias is None else out + bias

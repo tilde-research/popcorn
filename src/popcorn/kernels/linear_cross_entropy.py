@@ -22,6 +22,8 @@ def linear_cross_entropy(
     r"""Cross entropy fused with the lm-head projection, never materializing the logits.
 
     $$\mathcal{L}_t = -\log \operatorname{softmax}(x_t w^\top + b)_{y_t}$$
+
+    [Cut Cross-Entropy (Wijmans et al., 2024)](https://arxiv.org/abs/2411.09009)
     """
     return F.cross_entropy(
         F.linear(x, weight, bias),

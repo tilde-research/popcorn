@@ -30,7 +30,10 @@ def attn_varlen(
 
     $$y^{(s)} = \operatorname{softmax}\!\left(\frac{q^{(s)} {k^{(s)}}^\top}{\sqrt{d}} + M\right) v^{(s)}$$
 
-    [FlashAttention (Dao et al., 2022)](https://arxiv.org/abs/2205.14135)
+    [Neural Machine Translation by Jointly Learning to Align and Translate (Bahdanau et al., 2014)](https://arxiv.org/abs/1409.0473),
+    [Attention Is All You Need (Vaswani et al., 2017)](https://arxiv.org/abs/1706.03762),
+    [FlashAttention (Dao et al., 2022)](https://arxiv.org/abs/2205.14135),
+    [GQA (Ainslie et al., 2023)](https://arxiv.org/abs/2305.13245)
     """
     return torch.cat(
         [

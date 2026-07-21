@@ -26,6 +26,8 @@ def linear_jsd(
     $$\mathcal{L} = \frac{1}{T} \sum_t \mathrm{JSD}_\beta\!\Big(
     \operatorname{softmax}\!\big(s_t w_s^\top / \tau\big) \,\Big\|\,
     \operatorname{softmax}\!\big(u_t w_u^\top / \tau\big)\Big)$$
+
+    [Liger Kernel (Hsu et al., 2024)](https://arxiv.org/abs/2410.10989)
     """
     log_p = (upcast(F.linear(student, student_weight)) / temperature).log_softmax(-1)
     log_q = (upcast(F.linear(teacher, teacher_weight)) / temperature).log_softmax(-1).detach()

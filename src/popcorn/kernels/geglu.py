@@ -11,6 +11,7 @@ def geglu(a: Float[Tensor, "... hidden"], b: Float[Tensor, "... hidden"]) -> Flo
 
     $$y = \mathrm{gelu}(a) \odot b$$
 
+    [GLU (Dauphin et al., 2016)](https://arxiv.org/abs/1612.08083),
     [GLU Variants Improve Transformer (Shazeer, 2020)](https://arxiv.org/abs/2002.05202)
     """
     return F.gelu(a, approximate="tanh") * b

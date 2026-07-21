@@ -34,6 +34,7 @@ def qwen2vl_mrope(
 
     $$y = x \odot \tilde{\cos}_t + \mathrm{rot}_{1/2}(x) \odot \tilde{\sin}_t$$
 
+    [RoFormer (Su et al., 2021)](https://arxiv.org/abs/2104.09864),
     [Qwen2-VL (Wang et al., 2024)](https://arxiv.org/abs/2409.12191)
     """
     doubled = [*mrope_section, *mrope_section]

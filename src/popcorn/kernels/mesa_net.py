@@ -26,6 +26,7 @@ def mesa_net(
     G_t = e^{g_t} G_{t-1} + \beta_t k_t v_t^\top, \quad
     o_t = G_t^\top \big(H_t + \mathrm{diag}(\lambda)\big)^{-1} q_t$$
 
+    [Uncovering mesa-optimization algorithms in Transformers (von Oswald et al., 2023)](https://arxiv.org/abs/2309.05858),
     [MesaNet (von Oswald et al., 2025)](https://arxiv.org/abs/2506.05233)
     """
     q32, k32, v32, g32, beta32 = map(upcast, (q, k, v, g, beta))

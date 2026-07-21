@@ -19,7 +19,8 @@ def layer_norm_linear_quant(
 
     $$y = Q_{\mathrm{int8}}\!\big(\mathrm{LN}_{w_n, b_n}(x)\big) \, Q_{\{-1,0,1\}}(w_l)^\top + b_l$$
 
-    [BitNet (Wang et al., 2023)](https://arxiv.org/abs/2310.11453)
+    [BitNet (Wang et al., 2023)](https://arxiv.org/abs/2310.11453),
+    [BitNet b1.58 (Ma et al., 2024)](https://arxiv.org/abs/2402.17764)
     """
     h = activation_quant(F.layer_norm(x, norm_weight.shape, norm_weight, norm_bias, eps))
     return F.linear(h, weight_quant(linear_weight), linear_bias)

@@ -55,6 +55,7 @@ def mesa_net_decode(
 
     $$o = G^\top \big(H + \mathrm{diag}(\lambda)\big)^{-1} q$$
 
+    [Uncovering mesa-optimization algorithms in Transformers (von Oswald et al., 2023)](https://arxiv.org/abs/2309.05858),
     [MesaNet (von Oswald et al., 2025)](https://arxiv.org/abs/2506.05233)
     """
     q32, k32, v32, g32, lamb32, beta32, h_kk, h_kv = map(

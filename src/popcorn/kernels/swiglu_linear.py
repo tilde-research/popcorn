@@ -16,6 +16,7 @@ def swiglu_linear(
 
     $$z = \big(\mathrm{silu}(x) \odot y\big) \, w^\top + b$$
 
+    [GLU (Dauphin et al., 2016)](https://arxiv.org/abs/1612.08083),
     [GLU Variants Improve Transformer (Shazeer, 2020)](https://arxiv.org/abs/2002.05202)
     """
     return F.linear(F.silu(x) * y, weight, bias)

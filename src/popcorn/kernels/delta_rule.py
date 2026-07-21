@@ -25,6 +25,7 @@ def delta_rule(
 
     $$S_t = \big(I - \beta_t k_t k_t^\top\big) S_{t-1} + \beta_t k_t v_t^\top, \qquad o_t = c \, q_t^\top S_t$$
 
+    [Linear Transformers Are Secretly Fast Weight Programmers (Schlag et al., 2021)](https://arxiv.org/abs/2102.11174),
     [DeltaNet (Yang et al., 2024)](https://arxiv.org/abs/2406.06484)
     """
     scale = default_scale(softmax_scale, q.shape[-1])

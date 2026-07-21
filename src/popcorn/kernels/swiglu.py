@@ -12,6 +12,7 @@ def swiglu(a: Float[Tensor, "... hidden"], b: Float[Tensor, "... hidden"]) -> Fl
 
     $$y = \mathrm{silu}(a) \odot b$$
 
+    [GLU (Dauphin et al., 2016)](https://arxiv.org/abs/1612.08083),
     [GLU Variants Improve Transformer (Shazeer, 2020)](https://arxiv.org/abs/2002.05202)
     """
     return F.silu(a) * b

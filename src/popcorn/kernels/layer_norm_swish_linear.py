@@ -20,6 +20,8 @@ def layer_norm_swish_linear(
     r"""Layer norm, swish gate, then a linear projection, in one fused op.
 
     $$y = \big(\mathrm{LN}_{w_n, b_n}(x) \odot \mathrm{silu}(g)\big) \, w_l^\top + b_l$$
+
+    [Layer Normalization (Ba et al., 2016)](https://arxiv.org/abs/1607.06450)
     """
     h = F.layer_norm(x, norm_weight.shape, norm_weight, norm_bias, eps) * F.silu(g)
     return F.linear(h, linear_weight, linear_bias)

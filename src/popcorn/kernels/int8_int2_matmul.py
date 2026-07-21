@@ -25,6 +25,8 @@ def int8_int2_matmul(
     r"""Integer matrix product with int8 activations and ternary int2 weights.
 
     $$y = a b, \qquad a \in \mathbb{Z}_{\mathrm{int8}}, \; b \in \{-1, 0, 1\}$$
+
+    [BitNet b1.58 (Ma et al., 2024)](https://arxiv.org/abs/2402.17764)
     """
     products = a.to(torch.int32).unsqueeze(-1) * b.to(torch.int32).unsqueeze(0)
     return products.sum(dim=1, dtype=torch.int32)

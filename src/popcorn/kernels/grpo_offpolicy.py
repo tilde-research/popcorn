@@ -35,6 +35,7 @@ def grpo_offpolicy(
     $$\mathcal{L}_t = -\min\!\big(r_t A,\; \mathrm{clip}(r_t, 1 - \epsilon_{\mathrm{lo}}, 1 + \epsilon_{\mathrm{hi}}) A\big)
     + \beta \big(e^{\delta_t} - \delta_t - 1\big), \qquad r_t = e^{\ell_t - \ell^{\mathrm{old}}_t}$$
 
+    [PPO (Schulman et al., 2017)](https://arxiv.org/abs/1707.06347),
     [GRPO (Shao et al., 2024)](https://arxiv.org/abs/2402.03300)
     """
     logp = (upcast(logits[:, :-1]) / temperature).log_softmax(-1)

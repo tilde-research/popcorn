@@ -20,6 +20,8 @@ def linear_kl_div(
 
     $$\mathcal{L} = \frac{1}{T} \sum_t \mathrm{KL}\!\Big(
     \operatorname{softmax}\!\big(u_t w_u^\top\big) \,\Big\|\, \operatorname{softmax}\!\big(x_t w^\top\big)\Big)$$
+
+    [Liger Kernel (Hsu et al., 2024)](https://arxiv.org/abs/2410.10989)
     """
     log_p = F.linear(x, weight).log_softmax(-1)
     log_q = F.linear(target_x, target_weight).log_softmax(-1).detach()

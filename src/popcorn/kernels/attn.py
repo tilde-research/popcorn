@@ -23,6 +23,7 @@ def attn(
 
     $$y = \operatorname{softmax}\!\left(\frac{q k^\top}{\sqrt{d}} + M\right) v$$
 
+    [Neural Machine Translation by Jointly Learning to Align and Translate (Bahdanau et al., 2014)](https://arxiv.org/abs/1409.0473),
     [Attention Is All You Need (Vaswani et al., 2017)](https://arxiv.org/abs/1706.03762),
     [FlashAttention (Dao et al., 2022)](https://arxiv.org/abs/2205.14135),
     [GQA (Ainslie et al., 2023)](https://arxiv.org/abs/2305.13245)

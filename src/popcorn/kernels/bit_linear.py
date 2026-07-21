@@ -21,7 +21,8 @@ def bit_linear(
 
     $$y = Q_{\mathrm{int8}}\!\big(\mathrm{RMSNorm}(x)\big) \, Q_{\{-1,0,1\}}(w)^\top + b$$
 
-    [BitNet (Wang et al., 2023)](https://arxiv.org/abs/2310.11453)
+    [BitNet (Wang et al., 2023)](https://arxiv.org/abs/2310.11453),
+    [BitNet b1.58 (Ma et al., 2024)](https://arxiv.org/abs/2402.17764)
     """
     h = rms(x, 1e-6)
     if norm_weight is not None:

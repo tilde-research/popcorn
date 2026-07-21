@@ -21,6 +21,8 @@ def rms_norm_swish_linear(
     r"""RMS norm, swish gate, then a linear projection, in one fused op.
 
     $$y = \big(\mathrm{RMSNorm}_{w_n, b_n}(x) \odot \mathrm{silu}(g)\big) \, w_l^\top + b_l$$
+
+    [RMSNorm (Zhang & Sennrich, 2019)](https://arxiv.org/abs/1910.07467)
     """
     h = rms(x, eps)
     h = h * norm_weight if norm_bias is None else h * norm_weight + norm_bias

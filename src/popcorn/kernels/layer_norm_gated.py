@@ -20,6 +20,8 @@ def layer_norm_gated(
     r"""Layer norm scaled by a swish or sigmoid gate.
 
     $$y = \mathrm{LN}_{w,b}(x) \odot \mathrm{act}(g)$$
+
+    [Layer Normalization (Ba et al., 2016)](https://arxiv.org/abs/1607.06450)
     """
     out = F.layer_norm(x, weight.shape, weight, bias, eps)
     return out * (F.silu(g) if activation == "swish" else torch.sigmoid(g))

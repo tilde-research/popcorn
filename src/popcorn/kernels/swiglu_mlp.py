@@ -18,6 +18,8 @@ def swiglu_mlp(
 
     $$y = \big(\mathrm{silu}(x w_g^\top) \odot x w_u^\top\big) \, w_d^\top$$
 
-    [GLU Variants Improve Transformer (Shazeer, 2020)](https://arxiv.org/abs/2002.05202)
+    [GLU (Dauphin et al., 2016)](https://arxiv.org/abs/1612.08083),
+    [GLU Variants Improve Transformer (Shazeer, 2020)](https://arxiv.org/abs/2002.05202),
+    [LLaMA (Touvron et al., 2023)](https://arxiv.org/abs/2302.13971)
     """
     return F.linear(F.silu(F.linear(x, gate_weight)) * F.linear(x, up_weight), down_weight)
