@@ -272,12 +272,14 @@ export function PlotPane({ kernels }: { kernels: Kernel[] }) {
       </div>
 
       <div className="flex max-h-[45%] shrink-0 flex-col gap-2 overflow-y-auto border-t pt-3">
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-        {!barMode && (
+      {!barMode && (
+        <div className="border-b pb-2">
           <Control label="x axis" mono={false}>
             <Segmented options={controls.xOptions} value={selection.x} onChange={(x) => patch({ x })} mono />
           </Control>
-        )}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
         {controls.args.map(([key, values]) => (
           <Control key={key} label={key}>
             <Segmented
