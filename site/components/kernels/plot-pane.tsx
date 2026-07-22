@@ -273,7 +273,7 @@ export function PlotPane({ kernels }: { kernels: Kernel[] }) {
 
       <div className="flex max-h-[45%] shrink-0 flex-col gap-2 overflow-y-auto border-t pt-3">
       {!barMode && (
-        <div className="border-b pb-2">
+        <div className="flex justify-center border-b pb-2">
           <Control label="x axis" mono={false}>
             <Segmented options={controls.xOptions} value={selection.x} onChange={(x) => patch({ x })} mono />
           </Control>
