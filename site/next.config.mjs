@@ -6,6 +6,7 @@ const withMDX = createMDX();
 const config = {
   output: 'export',
   reactStrictMode: true,
+  devIndicators: false,
   // Set NEXT_PUBLIC_BASE_PATH=/popcorn when deploying to GitHub project pages.
   basePath: process.env.NEXT_PUBLIC_BASE_PATH || '',
 };

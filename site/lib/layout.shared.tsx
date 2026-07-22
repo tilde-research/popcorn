@@ -5,8 +5,12 @@ export function baseOptions(): BaseLayoutProps {
   return {
     nav: {
       title: (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={`${basePath}/popcorn-banner.png`} alt={appName} className="h-7 w-auto" />
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={`${basePath}/popcorn-name-light.png`} alt={appName} className="h-5 w-auto dark:hidden" />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={`${basePath}/popcorn-name-dark.png`} alt={appName} className="hidden h-5 w-auto dark:block" />
+        </>
       ),
     },
     links: [

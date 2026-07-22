@@ -183,7 +183,9 @@ export function mode<T>(values: T[]): T {
 
 export function defaultSelection(kernels: Kernel[], controls: Controls): Selection {
   const all = kernels.flatMap((kernel) => kernel.rows);
-  const seqish = controls.xOptions.find((name) => TOKEN_DIMS.has(name));
+  // Prefer a sequence-like sweep over batch when both are available.
+  const priority = ['seq', 'total', 'tokens', 'resp', 'response', 'batch'];
+  const seqish = priority.find((name) => controls.xOptions.includes(name));
   return {
     x: seqish ?? controls.xOptions[0] ?? '',
     metric: 'latency',
