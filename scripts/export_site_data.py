@@ -9,6 +9,7 @@ Writes site/public/data/index.json (card grid + search) and one
 import argparse
 import inspect
 import json
+import math
 from pathlib import Path
 
 import torch
@@ -31,7 +32,11 @@ BENCH_KEYS = (
 
 
 def errors(record) -> dict:
-    """Worst abs/rel error per pass plus the validation cutoff, as in Gauge.verdict."""
+    """Worst abs/rel error per pass plus the validation cutoff, as in Gauge.verdict.
+
+    Non-finite values (e.g. an infinite budget when the low-precision reference
+    overflows) are dropped: bare Infinity is not valid JSON.
+    """
     floor = FLOORS.get(getattr(torch, record.config["dtype"], None), 2e-5)
     out = {}
     for pass_, gauges in (("fwd", record.result.fwd), ("bwd", record.result.bwd)):
@@ -41,7 +46,7 @@ def errors(record) -> dict:
         out[f"{pass_}_cut"] = max(max(2 * g.budget, floor * g.scale) for g in gauges.values())
         out[f"{pass_}_rel"] = max(g.err / g.scale for g in gauges.values())
         out[f"{pass_}_rel_cut"] = max(max(2 * g.budget, floor * g.scale) / g.scale for g in gauges.values())
-    return out
+    return {key: value for key, value in out.items() if math.isfinite(value)}
 
 
 def rows(name: str) -> list[dict]:

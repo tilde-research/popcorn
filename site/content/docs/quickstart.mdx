@@ -1,9 +1,11 @@
 ---
-title: Quickstart
+title: Quick start
 description: Install Popcorn and dispatch your first kernel
 ---
 
 ## Install
+
+Install using `uv` with:
 
 ```bash
 uv add popcorn              # first-party only
@@ -15,6 +17,17 @@ uv add "popcorn[all]"       # every backend
 A backend is eligible only when its package is installed at a declared supported version:
 auto-dispatch skips unavailable ones, and forcing one raises with the install hint or
 version error. First-party kernels (the `popcorn` backend) are always included.
+
+<Callout type="info">
+  You may be able to use `pip` to install Popcorn (with `pip install popcorn`) but this
+  path is not officially supported.
+</Callout>
+
+Update using `uv` with:
+
+```bash
+uv add --upgrade popcorn
+```
 
 ## Call a kernel
 
@@ -32,59 +45,19 @@ weight = torch.ones(4096, device="cuda", dtype=torch.bfloat16)
 output = rms_norm(x, weight)
 ```
 
-Override automatic dispatching per call or per scope:
+To override automatic dispatching:
 
 ```python
-output = rms_norm(x, weight, backend="liger")  # force this call
-output = rms_norm["liger"](x, weight)          # equivalent
-
-with rms_norm["fla"] as rms_norm:              # every call in the block
-    ...
-
-rms_norm.available_backends()                  # ('fla', 'liger', 'quack', 'torch')
+output = rms_norm["liger"](x, weight)
+# same as:
+output = rms_norm(x, weight, backend="liger")
 ```
 
-A forced implementation never falls back: it raises `DispatchError` when it cannot serve
-the call.
+## Next steps
 
-## Validate and benchmark
-
-Two flags harden dispatch, per call as keyword arguments or process-wide as environment
-variables:
-
-| Per call | Process-wide | Effect |
-| --- | --- | --- |
-| `validate=True` | `POPCORN_VALIDATE=1` | Validate unrecorded cases synchronously before dispatch; only implementations with a recorded pass are selected. |
-| `bench=True` | `POPCORN_BENCH=1` | Additionally record timings and select the exact fastest implementation. |
-
-```bash
-POPCORN_BENCH=1 python train.py
-```
-
-Both modes run synchronously inside the call, so a first encounter with a new configuration
-may compile and check every candidate before returning. Results land in the user cache,
-`${XDG_CACHE_HOME:-~/.cache}/popcorn` by default.
-
-## torch.compile
-
-Compiled models can route through Popcorn without source changes: an inductor pass
-pattern-matches subgraphs computing a Popcorn kernel and rewrites them into the kernel's
-`torch.ops.popcorn` binding.
-
-```python
-import popcorn.compile
-
-popcorn.compile.enable(ops=["rms_norm", "swiglu"])  # or enable() for every kernel
-model = torch.compile(model)
-```
-
-<Callout type="warn" title="A rewrite is not automatically a win">
-  For small memory-bound kernels, inductor's fused codegen is often at roofline and beats any
-  dispatched backend. The rewrite pays off when a backend holds an algorithmic advantage the
-  compiler cannot recover — matched `attn` routes to flash-attention and measures 1.4–2x plain
-  inductor. Measure end to end, and scope `enable(ops=[...])` to attention-class kernels.
-</Callout>
-
-For registration, tuning, and the full dispatch contract, see the
-[README](https://github.com/tilde-research/popcorn#readme) and
-[CONTRIBUTING](https://github.com/tilde-research/popcorn/blob/main/CONTRIBUTING.md).
+<Cards>
+  <Card title="Dispatching" href="/docs/dispatching" description="How a call resolves to one implementation." />
+  <Card title="Validation" href="/docs/validation" description="Compare implementations against the reference." />
+  <Card title="Benchmarking" href="/docs/benchmarking" description="Record timings and route on data." />
+  <Card title="Kernel explorer" href="/kernels" description="Browse every kernel: math, backends, measured performance." />
+</Cards>

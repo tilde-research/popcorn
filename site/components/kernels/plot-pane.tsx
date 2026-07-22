@@ -77,8 +77,9 @@ export function PlotPane({ kernels }: { kernels: Kernel[] }) {
   const rows = kernels.flatMap((kernel) => kernel.rows);
   if (kernels.length === 0) return <Empty message="Select a kernel." />;
   if (rows.length === 0) return <Empty message="No recorded benchmarks yet." />;
-  if (controls.xOptions.length === 0)
-    return <Empty message="The plotted kernels share no sweepable dimension." />;
+  // No dimension sweeps across every plotted kernel: fall back to comparing
+  // backends at a single point as bars instead of lines over an x-axis.
+  const barMode = controls.xOptions.length === 0;
 
   // Overrides survive kernel switches; anything invalid for the current
   // kernel set silently falls back to the defaults.
@@ -114,63 +115,111 @@ export function PlotPane({ kernels }: { kernels: Kernel[] }) {
 
   const multi = kernels.length > 1;
   const traces: unknown[] = [];
-  const cutoffPoints: { x: number; y: number }[] = [];
-  for (const [position, kernel] of kernels.entries()) {
-    const filtered = filterRows(kernel, selection, controls);
-    const dash = DASHES[position % DASHES.length];
-    const label = (backend: string) => (multi ? `${kernel.name} · ${backend}` : backend);
-    const series = [...new Set(filtered.map((row) => row.backend))].sort().map((backend) => ({
-      backend,
-      points: filtered
-        .filter((row) => row.backend === backend)
-        .map((row) => ({ row, x: row.dims[selection.x], y: metric.value(row, selection.pass) })),
-    }));
-    // One synthetic torch series per kernel (median across backends' ref values).
-    const byX = new Map<number, number[]>();
-    for (const row of filtered) {
-      const value = referenceValue(row);
-      if (value !== null) byX.set(row.dims[selection.x], [...(byX.get(row.dims[selection.x]) ?? []), value]);
-    }
-    if (byX.size > 0)
-      series.push({
-        backend: 'torch',
-        points: [...byX.entries()].map(([x, values]) => ({ row: filtered[0], x, y: median(values) })),
-      });
 
-    for (const { backend, points } of series) {
-      const kept = points
-        .filter((point): point is { row: KernelRow; x: number; y: number } => point.y !== null)
-        .sort((a, b) => a.x - b.x);
-      if (kept.length === 0) continue;
-      traces.push({
-        name: label(backend),
-        x: kept.map((point) => point.x),
-        y: kept.map((point) => point.y),
-        mode: 'lines+markers',
-        line: { color: backendColor(backend), dash },
-        marker: { size: 6 },
-        hovertemplate: `${label(backend)}<br>${selection.x}=%{x}<br>%{y:.4g} ${metric.unit}<extra></extra>`,
-      });
-    }
-    if (metric.cutoff)
-      for (const row of filtered) {
-        const cut = metric.cutoff(row, selection.pass);
-        if (cut !== null) cutoffPoints.push({ x: row.dims[selection.x], y: cut });
+  if (barMode) {
+    const labels: string[] = [];
+    const values: number[] = [];
+    const colors: string[] = [];
+    const cutoffs: (number | null)[] = [];
+    for (const kernel of kernels) {
+      const filtered = filterRows(kernel, selection, controls);
+      const label = (backend: string) => (multi ? `${kernel.name} · ${backend}` : backend);
+      const refs: number[] = [];
+      for (const row of [...filtered].sort((a, b) => a.backend.localeCompare(b.backend))) {
+        const value = metric.value(row, selection.pass);
+        const ref = referenceValue(row);
+        if (ref !== null) refs.push(ref);
+        if (value === null) continue;
+        labels.push(label(row.backend));
+        values.push(value);
+        colors.push(backendColor(row.backend));
+        cutoffs.push(metric.cutoff ? metric.cutoff(row, selection.pass) : null);
       }
-  }
+      if (refs.length > 0) {
+        labels.push(label('torch (ref)'));
+        values.push(median(refs));
+        colors.push(backendColor('torch'));
+        cutoffs.push(null);
+      }
+    }
+    if (labels.length > 0) {
+      traces.push({
+        type: 'bar',
+        x: labels,
+        y: values,
+        marker: { color: colors },
+        showlegend: false,
+        hovertemplate: `%{x}<br>%{y:.4g} ${metric.unit}<extra></extra>`,
+      });
+      if (cutoffs.some((cut) => cut !== null))
+        traces.push({
+          name: 'pass cutoff',
+          x: labels,
+          y: cutoffs,
+          mode: 'lines',
+          line: { color: '#f43f5e', dash: 'dot', width: 1.5 },
+          hovertemplate: `pass cutoff<br>%{y:.4g}<extra></extra>`,
+        });
+    }
+  } else {
+    const cutoffPoints: { x: number; y: number }[] = [];
+    for (const [position, kernel] of kernels.entries()) {
+      const filtered = filterRows(kernel, selection, controls);
+      const dash = DASHES[position % DASHES.length];
+      const label = (backend: string) => (multi ? `${kernel.name} · ${backend}` : backend);
+      const series = [...new Set(filtered.map((row) => row.backend))].sort().map((backend) => ({
+        backend,
+        points: filtered
+          .filter((row) => row.backend === backend)
+          .map((row) => ({ row, x: row.dims[selection.x], y: metric.value(row, selection.pass) })),
+      }));
+      // One synthetic torch series per kernel (median across backends' ref values).
+      const byX = new Map<number, number[]>();
+      for (const row of filtered) {
+        const value = referenceValue(row);
+        if (value !== null) byX.set(row.dims[selection.x], [...(byX.get(row.dims[selection.x]) ?? []), value]);
+      }
+      if (byX.size > 0)
+        series.push({
+          backend: 'torch',
+          points: [...byX.entries()].map(([x, values]) => ({ row: filtered[0], x, y: median(values) })),
+        });
 
-  if (cutoffPoints.length > 0) {
-    const byX = new Map<number, number[]>();
-    for (const point of cutoffPoints) byX.set(point.x, [...(byX.get(point.x) ?? []), point.y]);
-    const xs = [...byX.keys()].sort((a, b) => a - b);
-    traces.push({
-      name: 'pass cutoff',
-      x: xs,
-      y: xs.map((x) => median(byX.get(x)!)),
-      mode: 'lines',
-      line: { color: '#f43f5e', dash: 'dot', width: 1.5 },
-      hovertemplate: `pass cutoff<br>${selection.x}=%{x}<br>%{y:.4g}<extra></extra>`,
-    });
+      for (const { backend, points } of series) {
+        const kept = points
+          .filter((point): point is { row: KernelRow; x: number; y: number } => point.y !== null)
+          .sort((a, b) => a.x - b.x);
+        if (kept.length === 0) continue;
+        traces.push({
+          name: label(backend),
+          x: kept.map((point) => point.x),
+          y: kept.map((point) => point.y),
+          mode: 'lines+markers',
+          line: { color: backendColor(backend), dash },
+          marker: { size: 6 },
+          hovertemplate: `${label(backend)}<br>${selection.x}=%{x}<br>%{y:.4g} ${metric.unit}<extra></extra>`,
+        });
+      }
+      if (metric.cutoff)
+        for (const row of filtered) {
+          const cut = metric.cutoff(row, selection.pass);
+          if (cut !== null) cutoffPoints.push({ x: row.dims[selection.x], y: cut });
+        }
+    }
+
+    if (cutoffPoints.length > 0) {
+      const byX = new Map<number, number[]>();
+      for (const point of cutoffPoints) byX.set(point.x, [...(byX.get(point.x) ?? []), point.y]);
+      const xs = [...byX.keys()].sort((a, b) => a - b);
+      traces.push({
+        name: 'pass cutoff',
+        x: xs,
+        y: xs.map((x) => median(byX.get(x)!)),
+        mode: 'lines',
+        line: { color: '#f43f5e', dash: 'dot', width: 1.5 },
+        hovertemplate: `pass cutoff<br>${selection.x}=%{x}<br>%{y:.4g}<extra></extra>`,
+      });
+    }
   }
 
   return (
@@ -204,8 +253,16 @@ export function PlotPane({ kernels }: { kernels: Kernel[] }) {
           <PlotFrame
             data={traces}
             layout={{
-              xaxis: { title: { text: selection.x }, type: 'log', gridcolor: 'rgba(128,128,128,0.2)' },
-              yaxis: { title: { text: metric.unit }, type: 'log', gridcolor: 'rgba(128,128,128,0.2)' },
+              xaxis: barMode
+                ? { type: 'category', gridcolor: 'rgba(128,128,128,0.2)' }
+                : { title: { text: selection.x }, type: 'log', gridcolor: 'rgba(128,128,128,0.2)' },
+              yaxis: {
+                title: { text: metric.unit },
+                // Bars encode magnitude by length from zero; log scale would lie.
+                type: barMode && !metric.cutoff ? 'linear' : 'log',
+                rangemode: barMode ? 'tozero' : 'normal',
+                gridcolor: 'rgba(128,128,128,0.2)',
+              },
               legend: { orientation: 'h', y: -0.28 },
             }}
           />
@@ -216,14 +273,16 @@ export function PlotPane({ kernels }: { kernels: Kernel[] }) {
 
       <div className="flex max-h-[45%] shrink-0 flex-col gap-2 overflow-y-auto border-t pt-3">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-        <Control label="x axis" mono={false}>
-          <Segmented options={controls.xOptions} value={selection.x} onChange={(x) => patch({ x })} mono />
-        </Control>
+        {!barMode && (
+          <Control label="x axis" mono={false}>
+            <Segmented options={controls.xOptions} value={selection.x} onChange={(x) => patch({ x })} mono />
+          </Control>
+        )}
         {controls.args.map(([key, values]) => (
           <Control key={key} label={key}>
             <Segmented
               options={values}
-              value={selection.args[key] ?? mode(rows.filter((row) => key in row.args).map((row) => fmt(row.args[key])))}
+              value={selection.args[key] ?? controls.argDefaults[key]}
               onChange={(value) => patch({ args: { ...selection.args, [key]: value } })}
               mono
             />
@@ -240,12 +299,17 @@ export function PlotPane({ kernels }: { kernels: Kernel[] }) {
           </Control>
         )}
       </div>
+      {controls.fixed.length > 0 && (
+        <p className="font-mono text-[11px] text-fd-muted-foreground">
+          fixed: {controls.fixed.map(([name, value]) => `${name}=${value}`).join('  ·  ')}
+        </p>
+      )}
       <div className="grid grid-cols-1 gap-x-8 gap-y-1.5 sm:grid-cols-2">
         {controls.dims
           .filter(([, values]) => values.length > 1)
           .map(([name, values]) => {
             const onAxis = name === selection.x;
-            const current = selection.dims[name] ?? mode(values);
+            const current = selection.dims[name] ?? controls.dimDefaults[name] ?? values[0];
             const index = Math.max(0, values.indexOf(current));
             return (
               <label key={name} className={`flex items-center gap-3 text-xs ${onAxis ? 'opacity-40' : ''}`}>

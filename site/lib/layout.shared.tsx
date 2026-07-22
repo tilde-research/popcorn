@@ -1,10 +1,13 @@
 import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
-import { appName, gitConfig } from './shared';
+import { appName, basePath, gitConfig } from './shared';
 
 export function baseOptions(): BaseLayoutProps {
   return {
     nav: {
-      title: appName,
+      title: (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={`${basePath}/popcorn-banner.png`} alt={appName} className="h-7 w-auto" />
+      ),
     },
     links: [
       { text: 'Docs', url: '/docs' },

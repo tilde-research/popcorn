@@ -165,25 +165,41 @@ export function Workspace({ entries }: { entries: KernelIndexEntry[] }) {
 
   const Row = ({ entry, isPinned }: { entry: KernelIndexEntry; isPinned: boolean }) => (
     <div
-      className={`group flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors ${
-        entry.name === selected ? 'bg-fd-accent text-fd-accent-foreground' : 'hover:bg-fd-accent/50'
+      className={`group flex cursor-pointer flex-col gap-1.5 rounded-xl border p-3 transition-colors ${
+        entry.name === selected
+          ? 'border-fd-primary/50 bg-fd-accent text-fd-accent-foreground'
+          : 'bg-fd-card hover:border-fd-primary/30'
       }`}
       onClick={() => setSelected(entry.name)}
     >
-      <span className="truncate font-mono">{entry.name}</span>
-      <span className="ms-auto shrink-0 text-[11px] text-fd-muted-foreground">{entry.backends.length}</span>
-      <button
-        title={isPinned ? 'Unpin' : `Pin to compare (max ${MAX_PINNED})`}
-        onClick={(event) => {
-          event.stopPropagation();
-          togglePin(entry.name);
-        }}
-        className={`shrink-0 rounded p-0.5 transition-opacity hover:text-fd-primary ${
-          isPinned ? 'text-fd-primary' : 'text-fd-muted-foreground opacity-0 group-hover:opacity-100'
-        }`}
-      >
-        <Pin className={`size-3.5 ${isPinned ? 'fill-current' : ''}`} />
-      </button>
+      <div className="flex items-center gap-2">
+        <span className="truncate font-mono text-sm font-semibold">{entry.name}</span>
+        <span className="ms-auto shrink-0 text-[11px] text-fd-muted-foreground">
+          {entry.backends.length} backend{entry.backends.length === 1 ? '' : 's'}
+        </span>
+        <button
+          title={isPinned ? 'Unpin' : `Pin to compare (max ${MAX_PINNED})`}
+          onClick={(event) => {
+            event.stopPropagation();
+            togglePin(entry.name);
+          }}
+          className={`shrink-0 rounded p-0.5 transition-opacity hover:text-fd-primary ${
+            isPinned ? 'text-fd-primary' : 'text-fd-muted-foreground opacity-0 group-hover:opacity-100'
+          }`}
+        >
+          <Pin className={`size-3.5 ${isPinned ? 'fill-current' : ''}`} />
+        </button>
+      </div>
+      {entry.summary && <p className="line-clamp-2 text-xs text-fd-muted-foreground">{entry.summary}</p>}
+      {entry.tags.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {entry.tags.map((tag) => (
+            <span key={tag} className="rounded-full bg-fd-muted px-1.5 py-0.5 text-[10px] text-fd-muted-foreground">
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 
@@ -215,9 +231,9 @@ export function Workspace({ entries }: { entries: KernelIndexEntry[] }) {
             ))}
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-2">
+        <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-2">
           {pinnedEntries.length > 0 && (
-            <div className="mb-2 border-b pb-2">
+            <div className="flex flex-col gap-2 border-b pb-2">
               {pinnedEntries.map((entry) => (
                 <Row key={entry.name} entry={entry} isPinned />
               ))}

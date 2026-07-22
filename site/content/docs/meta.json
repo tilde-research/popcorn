@@ -1,4 +1,13 @@
 {
   "title": "Documentation",
-  "pages": ["index", "quickstart"]
+  "pages": [
+    "index",
+    "quickstart",
+    "dispatching",
+    "registration",
+    "validation",
+    "benchmarking",
+    "tuning",
+    "torch-compile"
+  ]
 }

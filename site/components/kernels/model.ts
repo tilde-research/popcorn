@@ -99,6 +99,11 @@ export interface Controls {
   xOptions: string[];
   dims: [string, number[]][];
   args: [string, string[]][];
+  /** Single-valued dims, shown as fixed context rather than controls. */
+  fixed: [string, number][];
+  /** Most benchmarked value per dim/arg; used when nothing is selected. */
+  dimDefaults: Record<string, number>;
+  argDefaults: Record<string, string>;
   dtypes: string[];
   devices: string[];
   presents: string[];
@@ -136,10 +141,19 @@ export function controlsFor(kernels: Kernel[]): Controls {
     ])
     .filter(([, values]) => values.length > 1);
 
+  const dimDefaults: Record<string, number> = {};
+  for (const [name, pool] of dims)
+    if (pool.length > 1) dimDefaults[name] = mode(all.filter((row) => name in row.dims).map((row) => row.dims[name]));
+  const argDefaults: Record<string, string> = {};
+  for (const [key] of args) argDefaults[key] = mode(all.filter((row) => key in row.args).map((row) => fmt(row.args[key])));
+
   return {
     xOptions,
     dims: [...dims.entries()],
     args,
+    fixed: [...dims.entries()].filter(([, pool]) => pool.length === 1).map(([name, pool]): [string, number] => [name, pool[0]]),
+    dimDefaults,
+    argDefaults,
     dtypes: distinct(all.map((row) => row.dtype)).sort(),
     devices: distinct(all.map((row) => row.device)).sort(),
     presents: distinct(all.map(presentKey)).sort(),
@@ -171,7 +185,7 @@ export function defaultSelection(kernels: Kernel[], controls: Controls): Selecti
   const all = kernels.flatMap((kernel) => kernel.rows);
   const seqish = controls.xOptions.find((name) => TOKEN_DIMS.has(name));
   return {
-    x: seqish ?? controls.xOptions[0],
+    x: seqish ?? controls.xOptions[0] ?? '',
     metric: 'latency',
     pass: 'forward',
     dtype: mode(all.map((row) => row.dtype)),
@@ -204,8 +218,7 @@ export function filterRows(kernel: Kernel, selection: Selection, controls: Contr
   const wanted = new Map<string, number>();
   for (const [name, pool] of pools) {
     if (name === selection.x || pool.length === 1) continue;
-    const union = controls.dims.find(([key]) => key === name)?.[1] ?? pool;
-    wanted.set(name, snap(selection.dims[name] ?? mode(union), pool));
+    wanted.set(name, snap(selection.dims[name] ?? controls.dimDefaults[name] ?? pool[0], pool));
   }
   const grad = selection.pass !== 'forward';
   const candidates = kernel.rows.filter(
@@ -216,7 +229,9 @@ export function filterRows(kernel: Kernel, selection: Selection, controls: Contr
       batchKey(row) === selection.batch &&
       (!grad || row.grad) &&
       [...wanted].every(([name, value]) => row.dims[name] === value) &&
-      Object.entries(row.args).every(([key, value]) => (selection.args[key] ?? fmt(value)) === fmt(value)),
+      Object.entries(row.args).every(
+        ([key, value]) => (selection.args[key] ?? controls.argDefaults[key] ?? fmt(value)) === fmt(value),
+      ),
   );
   // Forward pass: prefer the no-grad measurement when a case was recorded both ways.
   const byCase = new Map<string, KernelRow>();

@@ -21,13 +21,15 @@ export function PlotFrame({ data, layout }: { data: unknown[]; layout: Record<st
         ...layout,
       },
       { responsive: true, displaylogo: false },
-    );
+    ).then(() => Plotly.Plots.resize(element)); // container may have settled after first measure
   }, [data, layout]);
 
   useEffect(() => {
     const element = root.current;
     if (!element) return;
-    const observer = new ResizeObserver(() => void Plotly.Plots.resize(element));
+    const observer = new ResizeObserver(() => {
+      if (element.classList.contains('js-plotly-plot')) void Plotly.Plots.resize(element);
+    });
     observer.observe(element);
     return () => {
       observer.disconnect();
