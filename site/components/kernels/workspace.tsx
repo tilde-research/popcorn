@@ -1,0 +1,250 @@
+'use client';
+import type { Kernel, KernelIndexEntry } from '@/lib/kernels';
+import { basePath, gitConfig } from '@/lib/shared';
+import { useKernels } from '@/lib/use-kernels';
+import { DynamicCodeBlock } from 'fumadocs-ui/components/dynamic-codeblock';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import katex from 'katex';
+import { Download, FileCode, Pin } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { MAX_PINNED } from './model';
+import { PlotPane } from './plot-pane';
+
+function usageSnippet(k: Kernel): string {
+  const call = k.params.filter((p) => p.default === undefined).map((p) => p.name).join(', ');
+  const forced = k.backends.find((b) => b.name !== 'torch')?.name;
+  const lines = [`from popcorn.kernels import ${k.name}`, '', `out = ${k.name}(${call})  # auto-dispatch`];
+  if (forced) lines.push(`out = ${k.name}(${call}, backend="${forced}")  # force a backend`);
+  return lines.join('\n');
+}
+
+function profileSnippet(k: Kernel): string {
+  const call = k.params.filter((p) => p.default === undefined).map((p) => p.name).join(', ');
+  return [
+    `# validate + benchmark every eligible backend, then route to the fastest`,
+    `out = ${k.name}(${call}, bench=True)`,
+    '',
+    `# or process-wide: POPCORN_BENCH=1 python train.py`,
+    `print(${k.name})  # signature and per-backend constraints`,
+  ].join('\n');
+}
+
+function InfoPane({ k }: { k: Kernel }) {
+  const math = k.math
+    ? katex.renderToString(k.math, { displayMode: true, throwOnError: false, strict: false })
+    : null;
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="font-mono text-xl font-bold">{k.name}</h1>
+        <div className="flex flex-wrap gap-1">
+          {k.tags.map((tag) => (
+            <span key={tag} className="rounded-full bg-fd-muted px-2 py-0.5 text-[11px] text-fd-muted-foreground">
+              {tag}
+            </span>
+          ))}
+        </div>
+        <div className="ms-auto flex items-center gap-2 text-xs">
+          <a
+            href={`https://github.com/${gitConfig.user}/${gitConfig.repo}/blob/${gitConfig.branch}/src/popcorn/kernels/${k.name}.py`}
+            className="flex items-center gap-1.5 rounded-lg border bg-fd-card px-2.5 py-1.5 transition-colors hover:bg-fd-accent"
+          >
+            <FileCode className="size-3.5" /> source
+          </a>
+          <a
+            href={`${basePath}/data/${k.name}.json`}
+            download={`${k.name}.json`}
+            className="flex items-center gap-1.5 rounded-lg border bg-fd-card px-2.5 py-1.5 transition-colors hover:bg-fd-accent"
+          >
+            <Download className="size-3.5" /> data
+          </a>
+        </div>
+      </div>
+      <p className="text-sm text-fd-muted-foreground">{k.summary}</p>
+      {math && <div className="overflow-x-auto text-sm" dangerouslySetInnerHTML={{ __html: math }} />}
+      {k.citations.length > 0 && (
+        <p className="text-xs text-fd-muted-foreground">
+          {k.citations.map((citation, index) => (
+            <span key={citation.url}>
+              {index > 0 && ', '}
+              <a href={citation.url} className="underline hover:text-fd-foreground">
+                {citation.label}
+              </a>
+            </span>
+          ))}
+        </p>
+      )}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+        <table className="h-fit w-full text-sm">
+          <thead>
+            <tr className="border-b text-left text-xs text-fd-muted-foreground">
+              <th className="py-2 pr-4 font-medium">backend</th>
+              <th className="py-2 pr-4 font-medium">source</th>
+              <th className="py-2 font-medium">notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {k.backends.map((b) => (
+              <tr key={b.name} className="border-b last:border-0">
+                <td className="py-2 pr-4 font-mono font-semibold">{b.name}</td>
+                <td className="py-2 pr-4 font-mono text-xs text-fd-muted-foreground">{b.source ?? 'reference'}</td>
+                <td className="py-2 text-xs text-fd-muted-foreground">
+                  {[
+                    b.forward_only ? 'forward-only' : null,
+                    ...Object.entries(b.supports).map(([dim, constraint]) => `${dim}: ${constraint}`),
+                  ]
+                    .filter(Boolean)
+                    .join(', ') || '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <Tabs items={['Use it', 'Profile it']}>
+          <Tab value="Use it">
+            <DynamicCodeBlock lang="python" code={usageSnippet(k)} />
+          </Tab>
+          <Tab value="Profile it">
+            <DynamicCodeBlock lang="python" code={profileSnippet(k)} />
+          </Tab>
+        </Tabs>
+      </div>
+    </div>
+  );
+}
+
+export function Workspace({ entries }: { entries: KernelIndexEntry[] }) {
+  const [query, setQuery] = useState('');
+  const [activeTags, setActiveTags] = useState<string[]>([]);
+  const [pinned, setPinned] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
+  const ready = useRef(false);
+
+  const names = useMemo(() => new Set(entries.map((e) => e.name)), [entries]);
+
+  // URL <-> state: ?k=pinned,csv&s=selected (replaceState keeps history clean).
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const k = (params.get('k') ?? '').split(',').filter((name) => names.has(name));
+    const s = params.get('s');
+    setPinned(k.slice(0, MAX_PINNED));
+    setSelected(s && names.has(s) ? s : (k[0] ?? (names.has('attn') ? 'attn' : (entries[0]?.name ?? null))));
+    ready.current = true;
+  }, [entries, names]);
+
+  useEffect(() => {
+    if (!ready.current) return;
+    const params = new URLSearchParams();
+    if (pinned.length > 0) params.set('k', pinned.join(','));
+    if (selected) params.set('s', selected);
+    const search = params.toString();
+    history.replaceState(null, '', search ? `?${search}` : location.pathname);
+  }, [pinned, selected]);
+
+  const togglePin = (name: string) =>
+    setPinned((current) =>
+      current.includes(name) ? current.filter((n) => n !== name) : [...current, name].slice(0, MAX_PINNED),
+    );
+
+  // Plotted = pinned (stable dash order) + the transient selection last.
+  const plotted = selected && !pinned.includes(selected) ? [...pinned, selected] : pinned;
+  const kernels = useKernels(plotted);
+  const info = kernels.find((kernel) => kernel.name === selected) ?? null;
+
+  const tags = useMemo(() => [...new Set(entries.flatMap((e) => e.tags))].sort(), [entries]);
+  const q = query.toLowerCase();
+  const listed = entries.filter(
+    (e) =>
+      !pinned.includes(e.name) &&
+      (e.name.includes(q) || (e.summary ?? '').toLowerCase().includes(q)) &&
+      activeTags.every((tag) => e.tags.includes(tag)),
+  );
+  const pinnedEntries = pinned
+    .map((name) => entries.find((e) => e.name === name))
+    .filter((e): e is KernelIndexEntry => e !== undefined);
+
+  const Row = ({ entry, isPinned }: { entry: KernelIndexEntry; isPinned: boolean }) => (
+    <div
+      className={`group flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors ${
+        entry.name === selected ? 'bg-fd-accent text-fd-accent-foreground' : 'hover:bg-fd-accent/50'
+      }`}
+      onClick={() => setSelected(entry.name)}
+    >
+      <span className="truncate font-mono">{entry.name}</span>
+      <span className="ms-auto shrink-0 text-[11px] text-fd-muted-foreground">{entry.backends.length}</span>
+      <button
+        title={isPinned ? 'Unpin' : `Pin to compare (max ${MAX_PINNED})`}
+        onClick={(event) => {
+          event.stopPropagation();
+          togglePin(entry.name);
+        }}
+        className={`shrink-0 rounded p-0.5 transition-opacity hover:text-fd-primary ${
+          isPinned ? 'text-fd-primary' : 'text-fd-muted-foreground opacity-0 group-hover:opacity-100'
+        }`}
+      >
+        <Pin className={`size-3.5 ${isPinned ? 'fill-current' : ''}`} />
+      </button>
+    </div>
+  );
+
+  return (
+    <main className="flex h-[calc(100dvh-3.5rem)] overflow-hidden">
+      <aside className="flex w-1/4 min-w-60 flex-col border-e">
+        <div className="flex flex-col gap-2 border-b p-3">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={`Search ${entries.length} kernels...`}
+            className="w-full rounded-lg border bg-fd-card px-3 py-1.5 text-sm outline-none placeholder:text-fd-muted-foreground focus:ring-2 focus:ring-fd-ring"
+          />
+          <div className="flex flex-wrap gap-1">
+            {tags.map((tag) => (
+              <button
+                key={tag}
+                onClick={() =>
+                  setActiveTags((a) => (a.includes(tag) ? a.filter((t) => t !== tag) : [...a, tag]))
+                }
+                className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                  activeTags.includes(tag)
+                    ? 'border-fd-primary bg-fd-primary text-fd-primary-foreground'
+                    : 'bg-fd-card text-fd-muted-foreground hover:text-fd-foreground'
+                }`}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto p-2">
+          {pinnedEntries.length > 0 && (
+            <div className="mb-2 border-b pb-2">
+              {pinnedEntries.map((entry) => (
+                <Row key={entry.name} entry={entry} isPinned />
+              ))}
+            </div>
+          )}
+          {listed.map((entry) => (
+            <Row key={entry.name} entry={entry} isPinned={false} />
+          ))}
+          {listed.length === 0 && pinnedEntries.length === 0 && (
+            <p className="py-8 text-center text-sm text-fd-muted-foreground">No kernels match.</p>
+          )}
+        </div>
+      </aside>
+      <section className="flex min-w-0 flex-1 flex-col">
+        <div className="h-1/2 min-h-0 overflow-y-auto border-b p-5">
+          {info ? (
+            <InfoPane k={info} />
+          ) : (
+            <p className="flex h-full items-center justify-center text-sm text-fd-muted-foreground">
+              Select a kernel from the list.
+            </p>
+          )}
+        </div>
+        <div className="h-1/2 min-h-0 overflow-y-auto p-5">
+          <PlotPane kernels={kernels} />
+        </div>
+      </section>
+    </main>
+  );
+}

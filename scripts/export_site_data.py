@@ -11,11 +11,37 @@ import inspect
 import json
 from pathlib import Path
 
+import torch
+
 import popcorn.kernels  # noqa: F401  # populates KERNELS
 from popcorn import KERNELS
+from popcorn.bench.compare import FLOORS
 from popcorn.bench.store import BUNDLED_REPORTS, read_file
 
-BENCH_KEYS = ("fwd_ms", "bwd_ms", "ref_fwd_ms", "ref_bwd_ms")
+BENCH_KEYS = (
+    "fwd_ms",
+    "bwd_ms",
+    "ref_fwd_ms",
+    "ref_bwd_ms",
+    "fwd_mem_mb",
+    "bwd_mem_mb",
+    "ref_fwd_mem_mb",
+    "ref_bwd_mem_mb",
+)
+
+
+def errors(record) -> dict:
+    """Worst abs/rel error per pass plus the validation cutoff, as in Gauge.verdict."""
+    floor = FLOORS.get(getattr(torch, record.config["dtype"], None), 2e-5)
+    out = {}
+    for pass_, gauges in (("fwd", record.result.fwd), ("bwd", record.result.bwd)):
+        if not gauges:
+            continue
+        out[f"{pass_}_err"] = max(g.err for g in gauges.values())
+        out[f"{pass_}_cut"] = max(max(2 * g.budget, floor * g.scale) for g in gauges.values())
+        out[f"{pass_}_rel"] = max(g.err / g.scale for g in gauges.values())
+        out[f"{pass_}_rel_cut"] = max(max(2 * g.budget, floor * g.scale) / g.scale for g in gauges.values())
+    return out
 
 
 def rows(name: str) -> list[dict]:
@@ -33,6 +59,7 @@ def rows(name: str) -> list[dict]:
             "grad": record.result.grad,
             **{k: record.config[k] for k in ("dims", "batch", "args", "present")},
             **{k: bench[k] for k in BENCH_KEYS if k in bench},
+            **errors(record),
         }
         for record in latest.values()
         if (bench := record.result.bench).get("fwd_ms")

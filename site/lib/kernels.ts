@@ -1,6 +1,3 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
-
 export interface KernelIndexEntry {
   name: string;
   summary: string | null;
@@ -29,6 +26,18 @@ export interface KernelRow {
   bwd_ms?: number;
   ref_fwd_ms?: number;
   ref_bwd_ms?: number;
+  fwd_mem_mb?: number;
+  bwd_mem_mb?: number;
+  ref_fwd_mem_mb?: number;
+  ref_bwd_mem_mb?: number;
+  fwd_err?: number;
+  bwd_err?: number;
+  fwd_cut?: number;
+  bwd_cut?: number;
+  fwd_rel?: number;
+  bwd_rel?: number;
+  fwd_rel_cut?: number;
+  bwd_rel_cut?: number;
 }
 
 export interface Kernel {
@@ -42,12 +51,3 @@ export interface Kernel {
   rows: KernelRow[];
 }
 
-const DATA = path.join(process.cwd(), 'public', 'data');
-
-export async function kernelIndex(): Promise<KernelIndexEntry[]> {
-  return JSON.parse(await fs.readFile(path.join(DATA, 'index.json'), 'utf-8'));
-}
-
-export async function kernel(name: string): Promise<Kernel> {
-  return JSON.parse(await fs.readFile(path.join(DATA, `${name}.json`), 'utf-8'));
-}

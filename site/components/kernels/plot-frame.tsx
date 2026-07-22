@@ -26,10 +26,14 @@ export function PlotFrame({ data, layout }: { data: unknown[]; layout: Record<st
 
   useEffect(() => {
     const element = root.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => void Plotly.Plots.resize(element));
+    observer.observe(element);
     return () => {
-      if (element) Plotly.purge(element);
+      observer.disconnect();
+      Plotly.purge(element);
     };
   }, []);
 
-  return <div ref={root} className="h-[420px] w-full" />;
+  return <div ref={root} className="h-full min-h-64 w-full" />;
 }
