@@ -2,7 +2,7 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
 def generalized_jsd(log_p, log_q, beta):
@@ -19,7 +19,6 @@ def generalized_jsd(log_p, log_q, beta):
 
 # log_q is the teacher and treated as a constant, matching liger.
 @register_kernel(
-    test_shapes={"vocab": Range(2, 4096)},
     test_args={"beta": [0.0, 0.5, 1.0]},
     test_inputs={"log_p": lambda t: t.log_softmax(-1), "log_q": lambda t: t.log_softmax(-1)},
     tags={Tag.LOSS},

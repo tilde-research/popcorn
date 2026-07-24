@@ -9,6 +9,7 @@ declare_backend("fla", package="flash-linear-attention", min_version="0.4.0", ma
 declare_backend("liger", package="liger-kernel", min_version="0.6.0", max_version="0.7.0", extra="liger")
 declare_backend("popcorn", package="triton", min_version="3.6.0", max_version="3.6.0")
 declare_backend("quack", package="quack-kernels", min_version="0.5.0", max_version="0.5.0", extra="quack")
+declare_backend("unsloth", package="unsloth", min_version="2026.7.1", max_version="2026.7.5", extra="unsloth")
 
 from popcorn.kernels.abc import abc
 from popcorn.kernels.add_rms_norm import add_rms_norm

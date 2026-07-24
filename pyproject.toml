@@ -36,11 +36,13 @@ fa3 = ["flash-attn-3>=3.0.0,<=3.0.0"]
 fla = ["flash-linear-attention>=0.4.0,<=0.4.2"]
 liger = ["liger-kernel>=0.6.0,<=0.7.0"]
 quack = ["quack-kernels>=0.5.0,<=0.5.0"]
+unsloth = ["unsloth>=2026.7.1,<=2026.7.5"]
 all = [
     "flash-attn-3>=3.0.0,<=3.0.0",
     "flash-linear-attention>=0.4.0,<=0.4.2",
     "liger-kernel>=0.6.0,<=0.7.0",
     "quack-kernels>=0.5.0,<=0.5.0",
+    "unsloth>=2026.7.1,<=2026.7.5",
 ]
 
 [dependency-groups]

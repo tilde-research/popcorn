@@ -4,10 +4,10 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32, Int
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
-@register_kernel(test_shapes={"vocab": Range(2, 4096)}, test_args={"label_smoothing": [0.0, 0.1]}, tags={Tag.LOSS})
+@register_kernel(test_args={"label_smoothing": [0.0, 0.1]}, tags={Tag.LOSS})
 def cross_entropy(
     logits: Float[Tensor, "tokens vocab"],
     labels: Int[Tensor, "tokens"],
@@ -42,3 +42,17 @@ def cross_entropy_quack(
     logits: Float32[Tensor, "tokens vocab"], labels, ignore_index, label_smoothing: Literal[0.0], reduction
 ):
     return kernel(logits, labels, ignore_index=ignore_index, reduction=reduction)
+
+
+# unsloth hardcodes ignore_index=-100, no smoothing, and returns unreduced fp32
+# losses (the backward writes the logit gradient into the logits buffer), so
+# float32 inputs and reduction="none" are the exact subset.
+@cross_entropy.register("unsloth", source="unsloth.kernels.cross_entropy_loss.Fast_CrossEntropyLoss.apply")
+def cross_entropy_unsloth(
+    logits: Float32[Tensor, "tokens vocab"],
+    labels,
+    ignore_index: Literal[-100],
+    label_smoothing: Literal[0.0],
+    reduction: Literal["none"],
+):
+    return kernel(logits, labels)

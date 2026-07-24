@@ -8,18 +8,18 @@ from popcorn.kernels._utils import default_scale, upcast
 
 
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": Range(2, 512), "heads": {4}, "kv_heads": {2}, "head_dim": {64}},
+    test_shapes={"seq": Range(2, 512)},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"g": F.logsigmoid},
     tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION},
 )
 def forgetting_attn(
-    q: Float[Tensor, "batch seq heads head_dim"],
+    q: Float[Tensor, "batch seq q_heads head_dim"],
     k: Float[Tensor, "batch seq kv_heads head_dim"],
     v: Float[Tensor, "batch seq kv_heads head_dim"],
-    g: Float[Tensor, "batch seq heads"],
+    g: Float[Tensor, "batch seq q_heads"],
     softmax_scale: float | None = None,
-) -> Float[Tensor, "batch seq heads head_dim"]:
+) -> Float[Tensor, "batch seq q_heads head_dim"]:
     r"""Causal softmax attention with a learned per-head log forget gate on the scores.
 
     $$s_{ij} = c \, q_i k_j^\top + D_i - D_j, \qquad D = \mathrm{cumsum}(g)$$
@@ -40,5 +40,5 @@ def forgetting_attn(
 # bfloat16 only: fp32 runs the matmuls on tf32 cores and fp16 gate gradients
 # land just past tolerance.
 @forgetting_attn.register("fla", source="fla.ops.forgetting_attn.parallel_forgetting_attn")
-def forgetting_attn_fla(q: BFloat16[Tensor, "batch seq heads head_dim"], k, v, g, softmax_scale):
+def forgetting_attn_fla(q: BFloat16[Tensor, "batch seq q_heads head_dim"], k, v, g, softmax_scale):
     return kernel(q, k, v, g, scale=softmax_scale)

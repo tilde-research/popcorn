@@ -10,17 +10,17 @@ from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "channels": {4}, "channels_out": {4}, "seq": Range(8, 128), "ksize": {5}},
+    test_shapes={"channels": {4}, "seq": Range(8, 128)},
     test_args={"padding": [0, 2]},
     tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION, Tag.FUSED},
 )
 def multi_token_attention(
     scores: Float[Tensor, "batch channels seq seq"],
-    weight: Float[Tensor, "channels_out channels ksize ksize"],
-    bias: Float[Tensor, "channels_out"] | None = None,
+    weight: Float[Tensor, "out_channels channels kernel_size kernel_size"],
+    bias: Float[Tensor, "out_channels"] | None = None,
     padding: int = 0,
     sparse: Literal[False] = False,
-) -> Float[Tensor, "batch channels_out seq2 seq2"]:
+) -> Float[Tensor, "batch out_channels seq2 seq2"]:
     r"""Causal softmax over raw scores, a conv2d mixing attention maps, then re-masking the future.
 
     $$y = \mathrm{mask}_0\!\Big(\mathrm{conv2d}\big(\operatorname{softmax}(\mathrm{mask}_{-\infty}(s)),\, w, b\big)\Big)$$

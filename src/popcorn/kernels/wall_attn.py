@@ -24,21 +24,21 @@ def _wall_deps(**_):
 # diverges from the reference by ~10-40% (its own upstream tests only cover this
 # decay domain); `sink_bias` is a small per-head sink logit.
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": Range(2, 512), "heads": {4}, "kv_heads": {2}, "head_dim": {64}},
+    test_shapes={"seq": Range(2, 512)},
     test_args={"softmax_scale": [None, 0.25], "window_size": [None, 128]},
     test_inputs={"g": F.logsigmoid, "g_scalar": F.logsigmoid, "sink_bias": lambda t: t * 0.1},
     tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION},
 )
 def wall_attn(
-    q: Float[Tensor, "batch seq heads head_dim"],
+    q: Float[Tensor, "batch seq q_heads head_dim"],
     k: Float[Tensor, "batch seq kv_heads head_dim"],
     v: Float[Tensor, "batch seq kv_heads head_dim"],
-    g: Float[Tensor, "batch seq heads head_dim"],
-    g_scalar: Float[Tensor, "batch seq heads"] | None = None,
-    sink_bias: Float[Tensor, "heads"] | None = None,
+    g: Float[Tensor, "batch seq q_heads head_dim"],
+    g_scalar: Float[Tensor, "batch seq q_heads"] | None = None,
+    sink_bias: Float[Tensor, "q_heads"] | None = None,
     softmax_scale: float | None = None,
     window_size: int | None = None,
-) -> Float[Tensor, "batch seq heads head_dim"]:
+) -> Float[Tensor, "batch seq q_heads head_dim"]:
     r"""Causal attention with per-channel decay on every logit, optional scalar gate and sink.
 
     $$s_{ij} = c \sum_{d} q_{id} \, k_{jd} \, 2^{P_{id} - P_{jd}}, \qquad P = \mathrm{cumsum}(g)$$
@@ -81,7 +81,7 @@ def wall_attn(
 # `TRITON_F32_DEFAULT=ieee`, so the kernel's fp32 matmuls avoid tf32.
 @wall_attn.register("popcorn", source="popcorn.impls.wall_attn_tl.wall_attn", predicate=_wall_deps)
 def wall_attn_popcorn(
-    q: Float32[Tensor, "batch seq heads head_dim"],
+    q: Float32[Tensor, "batch seq q_heads head_dim"],
     k,
     v,
     g,

@@ -2,14 +2,14 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
 # seq must be a multiple of mini_batch_size; the singleton pool keeps the grid
 # on 16-aligned lengths.
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": {64}, "heads": {4}, "head_dim": {32}},
+    test_shapes={"seq": {64}, "head_dim": {32}},
     test_inputs={
         "eta": lambda t: torch.sigmoid(t) * 0.02,
         "w": lambda t: 1 + 0.1 * t,

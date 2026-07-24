@@ -7,7 +7,7 @@ from popcorn.kernels._utils import default_scale, upcast
 
 
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": Range(2, 256), "heads": {4}, "key_dim": {64}, "value_dim": {64}},
+    test_shapes={"seq": Range(2, 256)},
     test_args={"softmax_scale": [None, 0.25]},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )

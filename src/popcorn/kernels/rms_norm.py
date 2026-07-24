@@ -44,3 +44,11 @@ def _aligned(**arguments):
 @rms_norm.register("quack", source="quack.rmsnorm.rmsnorm", predicate=_aligned)
 def rms_norm_quack(x, weight, bias, eps):
     return kernel(x, weight, bias, eps=eps)
+
+
+# unsloth's backward returns only the input gradient (norm weights are assumed
+# frozen), so it is forward-only here; the kernel has no bias term. The final
+# False selects the plain variant over gemma's (1 + w) weighting.
+@rms_norm.register("unsloth", source="unsloth.kernels.rms_layernorm.Fast_RMS_Layernorm.apply", forward_only=True)
+def rms_norm_unsloth(x, weight, bias: Literal[None], eps):
+    return kernel(x, weight, eps, False)

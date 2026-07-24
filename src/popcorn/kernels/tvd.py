@@ -3,12 +3,11 @@ from typing import Literal
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
 # q is the target and treated as a constant, matching liger.
 @register_kernel(
-    test_shapes={"vocab": Range(2, 4096)},
     test_inputs={"p": lambda t: t.softmax(-1), "q": lambda t: t.softmax(-1)},
     tags={Tag.LOSS},
 )

@@ -60,7 +60,7 @@ def _case(op: Any, tokens: list[str], batch: tuple[int, ...] | None, dtype: torc
     optional = {spec.param for spec in op.specs if spec.optional}
     if unknown := (set(overrides) - op._dims - set(op.arg_pools)) | (present - optional):
         raise SystemExit(f"{op.name}: unknown names {sorted(unknown)}")
-    dims = tuple((name, overrides.get(name, max(_dim_pool(op.test_shapes.get(name))))) for name in sorted(op._dims))
+    dims = tuple((name, overrides.get(name, max(_dim_pool(op, name)))) for name in sorted(op._dims))
     if required := [name for name, pool in op.arg_pools.items() if not pool and name not in overrides]:
         raise SystemExit(f"{op.name}: pass {', '.join(f'{name}=...' for name in sorted(required))} (no tested default)")
     args = tuple((name, overrides[name] if name in overrides else op.arg_pools[name][0]) for name in sorted(op.arg_pools))

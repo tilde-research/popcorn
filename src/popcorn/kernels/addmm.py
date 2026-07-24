@@ -7,7 +7,6 @@ from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
-    test_shapes={"rows": {17}, "inner": {16}, "cols": {19}},
     test_args={"alpha": [1.0, 0.5], "beta": [1.0, 0.25]},
     tags={Tag.LINEAR, Tag.FEATURE_MIXER},
 )

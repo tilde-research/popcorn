@@ -5,9 +5,9 @@
 <!-- popcorn:badges -->
 <p align="center">
   <img src="https://img.shields.io/badge/kernels-96-blue" alt="kernels"/>
-  <img src="https://img.shields.io/badge/backends-6-blue" alt="backends"/>
-  <img src="https://img.shields.io/badge/implementations-111-blue" alt="implementations"/>
-  <img src="https://img.shields.io/badge/grid%20rows-19%2C016-blue" alt="grid rows"/>
+  <img src="https://img.shields.io/badge/backends-7-blue" alt="backends"/>
+  <img src="https://img.shields.io/badge/implementations-117-blue" alt="implementations"/>
+  <img src="https://img.shields.io/badge/grid%20rows-22%2C452-blue" alt="grid rows"/>
 </p>
 <!-- /popcorn:badges -->
 
@@ -281,6 +281,7 @@ Popcorn stands on the shoulders of the open-source kernel ecosystem. The optimiz
 - [Liger-Kernel](https://github.com/linkedin/Liger-Kernel)
 - [quack](https://github.com/Dao-AILab/quack)
 - [flash-attention](https://github.com/Dao-AILab/flash-attention)
+- [Unsloth](https://github.com/unslothai/unsloth)
 
 Adapted files credit their origin in the header comment.
 

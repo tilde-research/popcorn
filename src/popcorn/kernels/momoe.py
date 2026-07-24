@@ -21,7 +21,7 @@ def _momoe_deps(**_):
 # Routing is softmax-then-topk with the picked probabilities renormalized to
 # sum 1; the selection itself is gradient-free.
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": Range(2, 256), "dim": {64}, "intermediate": {128}, "experts": {8}},
+    test_shapes={"seq": Range(2, 256), "hidden": {64}, "intermediate": {128}},
     test_args={"top_k": [1, 6]},
     test_inputs={
         "gate_weight": lambda t: t / t.shape[1] ** 0.5,
@@ -31,13 +31,13 @@ def _momoe_deps(**_):
     tags={Tag.FEATURE_MIXER, Tag.ACTIVATION, Tag.LINEAR, Tag.FUSED},
 )
 def momoe(
-    x: Float[Tensor, "batch seq dim"],
-    gate_weight: Float[Tensor, "experts dim intermediate"],
-    up_weight: Float[Tensor, "experts dim intermediate"],
-    down_weight: Float[Tensor, "experts intermediate dim"],
+    x: Float[Tensor, "batch seq hidden"],
+    gate_weight: Float[Tensor, "experts hidden intermediate"],
+    up_weight: Float[Tensor, "experts hidden intermediate"],
+    down_weight: Float[Tensor, "experts intermediate hidden"],
     router_logits: Float[Tensor, "batch seq experts"],
     top_k: int = 2,
-) -> Float[Tensor, "batch seq dim"]:
+) -> Float[Tensor, "batch seq hidden"]:
     r"""Mixture of experts over SwiGLU MLPs, routed to the top-k experts by softmax probability.
 
     $$y = \sum_{e \in \mathrm{top}k(p)} \frac{p_e}{\sum_{e' \in \mathrm{top}k(p)} p_{e'}}
@@ -58,10 +58,10 @@ def momoe(
 # every intermediate buffer is allocated bf16 upstream).
 @momoe.register("popcorn", source="popcorn.impls.momoe_tl.momoe", predicate=_momoe_deps)
 def momoe_popcorn(
-    x: BFloat16[Tensor, "batch seq dim"],
-    gate_weight: BFloat16[Tensor, "experts dim intermediate"],
-    up_weight: BFloat16[Tensor, "experts dim intermediate"],
-    down_weight: BFloat16[Tensor, "experts intermediate dim"],
+    x: BFloat16[Tensor, "batch seq hidden"],
+    gate_weight: BFloat16[Tensor, "experts hidden intermediate"],
+    up_weight: BFloat16[Tensor, "experts hidden intermediate"],
+    down_weight: BFloat16[Tensor, "experts intermediate hidden"],
     router_logits: BFloat16[Tensor, "batch seq experts"],
     top_k,
 ):

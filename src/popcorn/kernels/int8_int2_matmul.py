@@ -32,13 +32,13 @@ def int8_int2_matmul(
     return products.sum(dim=1, dtype=torch.int32)
 
 
+# the module source serves both callables: liger packs four ternary weights
+# per byte before its matmul.
 @int8_int2_matmul.register(
     "liger",
-    source="liger_kernel.ops.experimental.mm_int8int2.matmul",
+    source="liger_kernel.ops.experimental.mm_int8int2",
     supports={"inner": Div(512)},
     forward_only=True,
 )
 def int8_int2_matmul_liger(a, b):
-    from liger_kernel.ops.experimental.mm_int8int2 import pack_weights
-
-    return kernel(a, pack_weights(b.clone()))
+    return kernel.matmul(a, kernel.pack_weights(b.clone()))

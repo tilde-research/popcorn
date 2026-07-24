@@ -7,7 +7,7 @@ from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": Range(2, 256), "heads": {4}, "key_dim": {16}, "value_dim": {64}},
+    test_shapes={"seq": Range(2, 256), "key_dim": {16}},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def rebased(

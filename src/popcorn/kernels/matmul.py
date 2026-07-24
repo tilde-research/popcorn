@@ -9,7 +9,7 @@ from popcorn import Tag, register_kernel
 from popcorn.kernels._utils import upcast
 
 
-@register_kernel(test_shapes={"rows": {17}, "inner": {16}, "cols": {19}}, tags={Tag.LINEAR, Tag.FEATURE_MIXER})
+@register_kernel(tags={Tag.LINEAR, Tag.FEATURE_MIXER})
 def matmul(
     a: Float[Tensor, "rows inner"],
     b: Float[Tensor, "inner cols"],

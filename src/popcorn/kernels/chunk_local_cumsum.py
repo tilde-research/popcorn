@@ -7,7 +7,7 @@ from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
-    test_shapes={"batch": {1}, "first": {9}, "second": {9}, "width": {16}},
+    test_shapes={"batch": {1}},
     test_args={"chunk_size": [4], "scale": [None, 0.5]},
     tags={Tag.REDUCTION},
 )

@@ -91,7 +91,7 @@ def rms_norm(
 
 `@register_kernel(fn, *, test_shapes=None, test_args=None, test_inputs=None, name=None, tags=None)`
 
-- `test_shapes`: `{dim: Range | set}`, replaces the default size grid for that dim
+- `test_shapes`: `{dim: Range | set}`, overrides the dim's canonical pool (`popcorn/core/dims.py`) — declare one only where the kernel demands it; derived dims (`response+1`) take no entry — they follow their base
 - `test_args`: `{scalar: [values]}` to grid over; scalars without an entry derive their pool from a `Literal` annotation, `bool`, or the default
 - `test_inputs`: `{tensor param: transform}` applied to the raw random draw when the op needs structured inputs (probabilities, log-space gates, normalized keys). A 1-arg transform gets the draw; a 3-arg transform gets `(draw, dims, generator)` for inputs built from the case dims, e.g. `cu_seqlens` offsets (see `src/popcorn/kernels/_varlen.py`)
 - `name`: op name, defaults to the function name
@@ -112,7 +112,7 @@ Every reference docstring follows one format, enforced by `test_kernel_doc_forma
 All tags live in `src/popcorn/core/tags.py` — read it before tagging, and add a new tag there and only there when none fits. That single file is what prevents near-duplicate tags; the tests reject untagged kernels and unworn tags in both directions.
 
 > [!TIP]
-> Op name: snake_case, the established torch/literature name (`rms_norm`, never `liger_rms`). Reference function: named exactly the op. Shapes: lowercase descriptive names, torch's where torch has them (`normalized_shape`, `vocab`, `tokens`); `...` for batch dims. Scalars: torch's parameter names (`eps`, `ignore_index`); booleans default `False`. One op, one meaning: semantic switches are separate ops, not flags.
+> Op name: snake_case, the established torch/literature name (`rms_norm`, never `liger_rms`). Reference function: named exactly the op. Shapes: the canonical vocabulary in `src/popcorn/core/dims.py` (names and their default grid pools) — reuse before inventing, torch's names where torch has them (`normalized_shape`, `vocab`, `tokens`), no abbreviations; `...` for batch dims; `heads` for one head count, `q_heads`/`kv_heads` when query and kv counts differ. A size determined by another is an expression, never a name: `response+1`, `head_dim/2`, `seq*num_householder` (one operation, the operand an int or a scalar parameter) — the grid computes it and dispatch validates it. Scalars: torch's parameter names (`eps`, `ignore_index`); booleans default `False`. One op, one meaning: semantic switches are separate ops, not flags.
 
 > [!NOTE]
 > → Bind backends to the new op: [1. Support an existing kernel](#1-support-an-existing-kernel)
@@ -124,7 +124,7 @@ All tags live in `src/popcorn/core/tags.py` — read it before tagging, and add 
 `@op.register(name, source=None, supports=None, predicate=None, forward_only=False)`
 
 - `name`: backend name
-- `source`: dotted path to the external kernel, imported lazily on first dispatch; alone it must match the reference signature exactly
+- `source`: dotted path to the external kernel, imported lazily on first dispatch; trailing segments may be attributes (`unsloth.kernels.layernorm.Fast_Layernorm.apply`), and a module path serves its members through `kernel` attributes (`kernel.matmul`); alone it must match the reference signature exactly
 - `supports`: `{dim: spec}` shape constraints; specs are exact sizes, sets, `Range`, `Div`, `Pow2`, callables, or tuples of these (all must hold)
 - `predicate`: `f(**args) -> bool` veto, last resort
 - `forward_only`: `True` for kernels without a backward; they decline autograd calls and the harness grades them forward-only
@@ -144,7 +144,7 @@ def rms_norm_liger(x, weight, bias: Literal[None], eps):   # dispatched only whe
 ```
 
 > [!TIP]
-> Backend name: the library's short lowercase name (`liger`); `liger:chunked` only when one library ships several implementations of the op. Adapter: named `<op>_<backend>`, body is argument mapping only; any arithmetic means different semantics, which means a different op. Backends listed alphabetically in the file; benchmarks decide speed, not order. Value and dtype constraints are narrowed annotations; shape constraints use `supports=`, always the least expressive spec that fits.
+> Backend name: the library's short lowercase name (`liger`); `liger:chunked` only when one library ships several implementations of the op. Adapter: named `<op>_<backend>`, body is argument mapping only, and never an import — every library callable arrives through `source=`, which keeps it lazy and fingerprinted; any arithmetic means different semantics, which means a different op. Backends listed alphabetically in the file; benchmarks decide speed, not order. Value and dtype constraints are narrowed annotations; shape constraints use `supports=`, always the least expressive spec that fits.
 
 > [!NOTE]
 > → Binding done: [5. Verify](#5-verify)

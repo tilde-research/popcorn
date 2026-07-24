@@ -11,20 +11,20 @@ from popcorn.kernels._utils import default_scale, upcast
 # softmax((qk + gate) * scale), following the fla kernel. `w` should be
 # unit-norm, `beta` in [0, 2].
 @register_kernel(
-    test_shapes={"batch": Range(1, 4), "seq": Range(2, 128), "heads": {4}, "kv_heads": {2}, "head_dim": {64}},
+    test_shapes={"batch": Range(1, 4)},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"w": lambda t: F.normalize(t, dim=-1), "beta": lambda t: 2 * torch.sigmoid(t), "g": F.logsigmoid},
     tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION, Tag.POSITIONAL},
 )
 def path_attn(
-    q: Float[Tensor, "batch seq heads head_dim"],
+    q: Float[Tensor, "batch seq q_heads head_dim"],
     k: Float[Tensor, "batch seq kv_heads head_dim"],
     v: Float[Tensor, "batch seq kv_heads head_dim"],
     w: Float[Tensor, "batch seq kv_heads head_dim"],
     beta: Float[Tensor, "batch seq kv_heads"],
-    g: Float[Tensor, "batch seq heads"] | None = None,
+    g: Float[Tensor, "batch seq q_heads"] | None = None,
     softmax_scale: float | None = None,
-) -> Float[Tensor, "batch seq heads head_dim"]:
+) -> Float[Tensor, "batch seq q_heads head_dim"]:
     r"""Causal attention where keys are position-encoded by accumulated Householder reflections.
 
     $$s_{ts} = q_t \big(H_t \cdots H_{s+1} k_s\big)^\top,
@@ -57,7 +57,7 @@ def path_attn(
 # current triton (constexpr/do_not_specialize conflict), see ISSUES.md.
 @path_attn.register("fla", source="fla.ops.path_attn.parallel_path_attn", forward_only=True)
 def path_attn_fla(
-    q: Float16[Tensor, "batch seq heads head_dim"] | BFloat16[Tensor, "batch seq heads head_dim"],
+    q: Float16[Tensor, "batch seq q_heads head_dim"] | BFloat16[Tensor, "batch seq q_heads head_dim"],
     k,
     v,
     w,

@@ -58,3 +58,69 @@ def test_unsupported_tokens_rejected():
 
     with pytest.raises(TypeError, match="unsupported dim token"):
         signature_of(op)
+
+
+def test_derived_dim_binds_and_validates():
+    def op(logits: Float[Tensor, "batch response+1 vocab"], ref: Float[Tensor, "batch response"]):
+        pass
+
+    specs = signature_of(op)
+    assert dim_names(specs) == {"batch", "response", "vocab"}
+    # logits comes first: the derived occurrence binds the base by inversion.
+    dims = extract(specs, {"logits": torch.zeros(2, 32, 7), "ref": torch.zeros(2, 31)})
+    assert dims == {"batch": 2, "response": 31, "vocab": 7}
+    with pytest.raises(DispatchError, match="ref has 31, other arguments have 30"):
+        extract(specs, {"logits": torch.zeros(2, 31, 7), "ref": torch.zeros(2, 31)})
+
+    def base_first(ref: Float[Tensor, "batch response"], logits: Float[Tensor, "batch response+1 vocab"]):
+        pass
+
+    with pytest.raises(DispatchError, match=r"logits has 31, expected 32 \(response=31\)"):
+        extract(signature_of(base_first), {"ref": torch.zeros(2, 31), "logits": torch.zeros(2, 31, 7)})
+
+
+def test_derived_dim_scalar_operand():
+    def op(q: Float[Tensor, "batch seq"], k: Float[Tensor, "batch seq*num_householder"], num_householder: int = 1):
+        pass
+
+    specs = signature_of(op)
+    dims = extract(specs, {"q": torch.zeros(2, 8), "k": torch.zeros(2, 24), "num_householder": 3})
+    assert dims == {"batch": 2, "seq": 8}
+    with pytest.raises(DispatchError, match=r"k has 25, expected 24 \(seq=8\)"):
+        extract(specs, {"q": torch.zeros(2, 8), "k": torch.zeros(2, 25), "num_householder": 3})
+    with pytest.raises(DispatchError, match="needs a positive int"):
+        extract(specs, {"q": torch.zeros(2, 8), "k": torch.zeros(2, 24), "num_householder": None})
+
+    def derived_first(k: Float[Tensor, "seq*num_householder"], num_householder: int = 1):
+        pass
+
+    # No free occurrence at all: the inversion must both bind and gatekeep.
+    assert extract(signature_of(derived_first), {"k": torch.zeros(24), "num_householder": 3}) == {"seq": 8}
+    with pytest.raises(DispatchError, match="size 25 is not a multiple of 3"):
+        extract(signature_of(derived_first), {"k": torch.zeros(25), "num_householder": 3})
+
+
+def test_derived_dim_division():
+    def op(x: Float[Tensor, "batch head_dim"], table: Float[Tensor, "batch head_dim/2"]):
+        pass
+
+    specs = signature_of(op)
+    assert extract(specs, {"x": torch.zeros(2, 32), "table": torch.zeros(2, 16)}) == {"batch": 2, "head_dim": 32}
+    with pytest.raises(DispatchError, match="head_dim=33 is not divisible by 2"):
+        extract(specs, {"x": torch.zeros(2, 33), "table": torch.zeros(2, 16)})
+    with pytest.raises(DispatchError, match=r"table has 16, expected 17 \(head_dim=34\)"):
+        extract(specs, {"x": torch.zeros(2, 34), "table": torch.zeros(2, 16)})
+
+
+def test_derived_operand_must_be_scalar_parameter():
+    def unknown(x: Float[Tensor, "seq*groups"]):
+        pass
+
+    with pytest.raises(TypeError, match="not a parameter"):
+        signature_of(unknown)
+
+    def tensor_operand(x: Float[Tensor, "seq*w"], w: Float[Tensor, "seq"]):
+        pass
+
+    with pytest.raises(TypeError, match="must be a scalar parameter"):
+        signature_of(tensor_operand)

@@ -14,13 +14,7 @@ def _fla_supported(g, A_log, dt_bias, lower_bound):
 
 # gate_dim must equal heads * key_dim; singleton pools keep the grid valid.
 @register_kernel(
-    test_shapes={
-        "batch": Range(1, 4),
-        "seq": {32},
-        "heads": {4},
-        "key_dim": {32},
-        "gate_dim": {128},
-    },
+    test_shapes={"batch": Range(1, 4), "seq": {32}, "key_dim": {32}},
     test_args={"lower_bound": [None, -5.0]},
     test_inputs={
         "g": lambda t: 2 * t,

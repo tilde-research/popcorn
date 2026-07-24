@@ -123,7 +123,7 @@ uv run python -m popcorn.bench run <op> --backend <backend>
 
 ## gsa / fla (grouped kv heads)
 
-- Case: any backward with `kv_heads < heads`, e.g. `heads=4,kv_heads=2,seq=2`
+- Case: any backward with `kv_heads < q_heads`, e.g. `q_heads=4,kv_heads=2,seq=2`
 - Error: `backward: RuntimeError: The size of tensor a (4) must match the size
   of tensor b (2) at non-singleton dimension 2`; on some cases the kernel
   instead dies with `CUDA error: an illegal memory access was encountered`,
@@ -155,7 +155,7 @@ uv run python -m popcorn.bench run <op> --backend <backend>
 
 ## rwkv4 / fla (16-bit state trajectory)
 
-- Case: any 16-bit backward, e.g. `chans=64,seq=33,bfloat16`
+- Case: any 16-bit backward, e.g. `channels=64,seq=33,bfloat16`
 - Error: `grad w: err 1.374e+01 > max(2*7.656e-02, 2e-02*25.0)`
 - Cause: the kernel saves the per-step `(alpha, beta, eps)` trajectory in the
   input dtype and the backward reconsumes it; 16-bit quantization of the `eps`
@@ -295,7 +295,7 @@ uv run python -m popcorn.bench run <op> --backend <backend>
 
 ## nsa / fla, popcorn (fp16 gradients)
 
-- Case: fp16 backward, e.g. `batch=2,head_dim=64,heads=16,kv_heads=1,seq=2,float16,softmax_scale=0.25`
+- Case: fp16 backward, e.g. `batch=2,head_dim=64,kv_heads=1,q_heads=16,seq=2,float16,softmax_scale=0.25`
 - Error: `grad k: err 7.429e-03 > max(2*2.514e-03, 1e-03*6.1)` (fla); the
   popcorn composition fails the same cases by similar margins (~2-3x budget)
 - Cause: fp16 accumulation noise through the three-branch composition (softmax
@@ -327,7 +327,7 @@ composition with these upstream bugs fixed (details in the file header):
 ## wall_attn / popcorn (16-bit gate gradients)
 
 - Case: 16-bit backward on short sequences, e.g.
-  `heads=4,kv_heads=2,seq=8,+g_scalar,bfloat16`
+  `kv_heads=2,q_heads=4,seq=8,+g_scalar,bfloat16`
 - Error: `grad g: err 3.49e-02 > max(2*..., 2e-2*...)` (bf16), `grad k` on some
   fp16 short-seq cases; the forward and `q`/`k`/`v` gradients stay within budget
 - Cause: the kernel returns analytic gate gradients derived structurally

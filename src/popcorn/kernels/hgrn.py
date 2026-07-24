@@ -8,7 +8,7 @@ from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": Range(2, 256), "hidden": {64}},
+    test_shapes={"seq": Range(2, 256), "hidden": {64}},
     test_inputs={"g": F.logsigmoid},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )

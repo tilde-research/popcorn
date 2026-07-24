@@ -3,24 +3,23 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
-# seq_h must equal seq * num_householder (fla's contract); singleton test pools
-# keep the grid consistent, like grpo's resp/resp_plus.
+# k, v, and beta hold num_householder entries per step (fla's contract).
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": {32}, "seq_h": {64}, "heads": {4}, "key_dim": {64}, "value_dim": {64}},
+    test_shapes={"seq": {32}},
     test_args={"num_householder": [2], "softmax_scale": [None, 0.25]},
     test_inputs={"k": lambda t: F.normalize(t, dim=-1), "beta": torch.sigmoid, "g": F.logsigmoid},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def gated_delta_product(
     q: Float[Tensor, "batch seq heads key_dim"],
-    k: Float[Tensor, "batch seq_h heads key_dim"],
-    v: Float[Tensor, "batch seq_h heads value_dim"],
+    k: Float[Tensor, "batch seq*num_householder heads key_dim"],
+    v: Float[Tensor, "batch seq*num_householder heads value_dim"],
     g: Float[Tensor, "batch seq heads"],
-    beta: Float[Tensor, "batch seq_h heads"],
+    beta: Float[Tensor, "batch seq*num_householder heads"],
     num_householder: int = 1,
     softmax_scale: float | None = None,
 ) -> Float[Tensor, "batch seq heads value_dim"]:

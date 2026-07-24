@@ -20,28 +20,20 @@ def _fla_supported(q, k, v, block_size, softmax_scale):
 # A compressed block becomes visible at the token that completes it. Rows
 # before the first complete block return zero output and zero log-sum-exp.
 @register_kernel(
-    test_shapes={
-        "batch": Range(1, 4),
-        "seq": {64},
-        "blocks": {2},
-        "heads": {16},
-        "kv_heads": {1},
-        "key_dim": {64},
-        "value_dim": {64},
-    },
+    test_shapes={"batch": Range(1, 4), "seq": {64}, "q_heads": {16}, "kv_heads": {1}},
     test_args={"block_size": [32], "softmax_scale": [None, 0.25]},
     test_inputs={"k": lambda t: F.normalize(t, dim=-1)},
     tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION},
 )
 def nsa_compression(
-    q: Float[Tensor, "batch seq heads key_dim"],
+    q: Float[Tensor, "batch seq q_heads key_dim"],
     k: Float[Tensor, "batch blocks kv_heads key_dim"],
     v: Float[Tensor, "batch blocks kv_heads value_dim"],
     block_size: int = 64,
     softmax_scale: float | None = None,
 ) -> tuple[
-    Float[Tensor, "batch seq heads value_dim"],
-    Float32[Tensor, "batch seq heads"],
+    Float[Tensor, "batch seq q_heads value_dim"],
+    Float32[Tensor, "batch seq q_heads"],
 ]:
     r"""Causal NSA attention over pre-compressed kv blocks; returns output and log-sum-exp.
 
@@ -81,7 +73,7 @@ def nsa_compression(
     predicate=_fla_supported,
 )
 def nsa_compression_fla(
-    q: Float32[Tensor, "batch seq heads key_dim"] | BFloat16[Tensor, "batch seq heads key_dim"],
+    q: Float32[Tensor, "batch seq q_heads key_dim"] | BFloat16[Tensor, "batch seq q_heads key_dim"],
     k,
     v,
     block_size,

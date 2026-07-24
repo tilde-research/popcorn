@@ -4,11 +4,11 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
 # The target branch is a constant, matching fla.
-@register_kernel(test_shapes={"vocab": Range(2, 4096)}, tags={Tag.LOSS, Tag.LINEAR, Tag.FUSED})
+@register_kernel(tags={Tag.LOSS, Tag.LINEAR, Tag.FUSED})
 def linear_kl_div(
     x: Float[Tensor, "tokens hidden"],
     target_x: Float[Tensor, "tokens target_hidden"],

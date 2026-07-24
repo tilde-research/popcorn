@@ -3,13 +3,12 @@ from typing import Literal
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
 # x is in log space, target in probability space (log space if log_target);
 # target is a constant, matching liger.
 @register_kernel(
-    test_shapes={"vocab": Range(2, 4096)},
     test_inputs={"x": lambda t: t.log_softmax(-1), "target": lambda t: t.softmax(-1)},
     tags={Tag.LOSS},
 )

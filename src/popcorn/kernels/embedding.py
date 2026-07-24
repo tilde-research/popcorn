@@ -2,16 +2,10 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32, Int
 from torch import Tensor
 
-from popcorn import Range, Tag, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
 @register_kernel(
-    test_shapes={
-        "batch": Range(1, 8),
-        "seq": Range(2, 128),
-        "vocab": Range(2, 4096),
-        "embedding_dim": {64},
-    },
     tags={Tag.LINEAR},
 )
 def embedding(
@@ -25,11 +19,9 @@ def embedding(
     return F.embedding(indices, weight)
 
 
-@embedding.register("liger")
+@embedding.register("liger", source="liger_kernel.ops.LigerEmbeddingFunction.apply")
 def embedding_liger(
     weight: Float32[Tensor, "vocab embedding_dim"],
     indices,
 ):
-    from liger_kernel.ops import LigerEmbeddingFunction
-
-    return LigerEmbeddingFunction.apply(weight, indices)
+    return kernel(weight, indices)

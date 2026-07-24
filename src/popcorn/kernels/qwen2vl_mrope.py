@@ -18,18 +18,18 @@ def _table(f):
 # mrope_section must sum to head_dim / 2; singleton test pools keep the grid
 # consistent. cos/sin are constants, matching liger.
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": Range(2, 512), "heads": {4}, "kv_heads": {2}, "head_dim": {32}},
+    test_shapes={"seq": Range(2, 512), "head_dim": {32}},
     test_args={"mrope_section": [[8, 4, 4]]},
     test_inputs={"cos": _table(torch.cos), "sin": _table(torch.sin)},
     tags={Tag.POSITIONAL},
 )
 def qwen2vl_mrope(
-    q: Float[Tensor, "batch heads seq head_dim"],
+    q: Float[Tensor, "batch q_heads seq head_dim"],
     k: Float[Tensor, "batch kv_heads seq head_dim"],
     cos: Float[Tensor, "3 batch seq head_dim"],
     sin: Float[Tensor, "3 batch seq head_dim"],
     mrope_section: list,
-) -> tuple[Float[Tensor, "batch heads seq head_dim"], Float[Tensor, "batch kv_heads seq head_dim"]]:
+) -> tuple[Float[Tensor, "batch q_heads seq head_dim"], Float[Tensor, "batch kv_heads seq head_dim"]]:
     r"""Multimodal rotary embedding: temporal, height, and width tables interleaved per section.
 
     $$y = x \odot \tilde{\cos}_t + \mathrm{rot}_{1/2}(x) \odot \tilde{\sin}_t$$

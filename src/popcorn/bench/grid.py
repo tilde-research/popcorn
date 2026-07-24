@@ -8,7 +8,9 @@ from typing import Any
 import torch
 
 from popcorn.bench.model import Case
+from popcorn.core.annotations import token_size
 from popcorn.core.constraints import Range, satisfies
+from popcorn.core.dims import DIMS
 
 # `op` stays `Any` here: the layering test forbids this module from importing
 # the dispatcher, even for annotations.
@@ -18,7 +20,8 @@ BATCHES = ((), (2, 3), (2, 2048))
 DTYPES = (torch.float32, torch.float16, torch.bfloat16)
 
 
-def _dim_pool(spec: Any) -> list[int]:
+def _dim_pool(op: Any, name: str) -> list[int]:
+    spec = op.test_shapes.get(name, DIMS.get(name))
     candidates = set(GRID)
     for atom in spec if isinstance(spec, tuple) else (spec,):
         match atom:
@@ -35,7 +38,7 @@ def _dim_pool(spec: Any) -> list[int]:
 def cases(op: Any, limit: int | None = None) -> list[Case]:
     if missing := [name for name, pool in op.arg_pools.items() if pool is None]:
         raise TypeError(f"{op.name}: arguments {missing} need test_args, a default, or a Literal annotation")
-    dim_axes = [[(name, value) for value in _dim_pool(op.test_shapes.get(name))] for name in sorted(op._dims)]
+    dim_axes = [[(name, value) for value in _dim_pool(op, name)] for name in sorted(op._dims)]
     arg_axes = [[(name, value) for value in pool] for name, pool in sorted(op.arg_pools.items()) if pool is not None]
     presence_axes = [[(name, False), (name, True)] for name in sorted(spec.param for spec in op.specs if spec.optional)]
     dtypes = DTYPES if any("float" in dtype for spec in op.specs for dtype in spec.dtypes) else (torch.float32,)
@@ -86,7 +89,7 @@ def make_inputs(
             if token is ...:
                 shape.extend(case.batch)
             else:
-                shape.append(token if isinstance(token, int) else dims[token])
+                shape.append(token_size(token, dims, inputs, spec.param))
         floating = any("float" in dtype for dtype in spec.dtypes)
         if floating:
             tensor = torch.randn(shape, generator=generator)

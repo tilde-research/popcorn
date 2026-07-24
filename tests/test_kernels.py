@@ -34,6 +34,45 @@ def backend_params():
     return params[index::count]
 
 
+def test_dim_names_are_canonical():
+    """Every dim name is vocabulary and every entry is used: new and retired
+    names both land in core/dims.py, one reviewable place."""
+    import popcorn.kernels  # noqa: F401
+    from popcorn import KERNELS
+    from popcorn.core.dims import DIMS
+
+    used = set().union(*(op._dims for op in KERNELS.values()))
+    assert used - DIMS.keys() == set(), f"undeclared dim names: {sorted(used - DIMS.keys())}"
+    assert DIMS.keys() - used == set(), f"unused vocabulary entries: {sorted(DIMS.keys() - used)}"
+    redundant = [
+        f"{op.name}:{name}" for op in KERNELS.values() for name, spec in op.test_shapes.items() if spec == DIMS.get(name)
+    ]
+    assert not redundant, f"test_shapes repeating the canonical pool: {redundant}"
+
+
+def test_adapters_are_import_free():
+    """Adapters map arguments only; library code arrives through `source=`, so
+    it stays lazy and fingerprinted. Imports inside a body dodge both."""
+    import dis
+    from types import CodeType
+
+    import popcorn.kernels  # noqa: F401
+    from popcorn import KERNELS
+
+    def imports(code):
+        if any(instruction.opname in ("IMPORT_NAME", "IMPORT_FROM") for instruction in dis.get_instructions(code)):
+            return True
+        return any(imports(const) for const in code.co_consts if isinstance(const, CodeType))
+
+    offenders = [
+        f"{op.name}:{backend.name}"
+        for op in KERNELS.values()
+        for backend in op._backends
+        if backend.adapter is not None and imports(backend.adapter.__code__)
+    ]
+    assert not offenders, f"function-body imports in adapters: {offenders}"
+
+
 @requires_cuda
 @pytest.mark.parametrize("op,backend", backend_params())
 def test_backend_matches_reference(op, backend):

@@ -8,18 +8,18 @@ from popcorn.kernels._utils import upcast
 
 
 def _strict_lower(A, dims, _generator):
-    rows = torch.arange(dims["seq"]).remainder(dims["block"])
-    cols = torch.arange(dims["block"])
+    rows = torch.arange(dims["seq"]).remainder(dims["block_size"])
+    cols = torch.arange(dims["block_size"])
     mask = cols[None, :] < rows[:, None]
     return A * mask[None, :, None, :] * 0.05
 
 
 @register_kernel(
-    test_shapes={"batch": {1}, "seq": {16, 23}, "heads": {2}, "block": {16}},
+    test_shapes={"batch": {1}, "seq": {16, 23}, "heads": {2}},
     test_inputs={"A": _strict_lower},
     tags={Tag.LINEAR},
 )
-def solve_tril(A: Float[Tensor, "batch seq heads block"]) -> Float[Tensor, "batch seq heads block"]:
+def solve_tril(A: Float[Tensor, "batch seq heads block_size"]) -> Float[Tensor, "batch seq heads block_size"]:
     r"""Invert each block of a chunked unit-lower-triangular matrix.
 
     $$y_b = \big(I + \mathrm{tril}_{-1}(A_b)\big)^{-1}$$
@@ -38,7 +38,7 @@ def solve_tril(A: Float[Tensor, "batch seq heads block"]) -> Float[Tensor, "batc
 @solve_tril.register(
     "fla",
     source="fla.ops.utils.solve_tril",
-    supports={"block": {16, 32, 64}},
+    supports={"block_size": {16, 32, 64}},
     forward_only=True,
 )
 def solve_tril_fla(A):

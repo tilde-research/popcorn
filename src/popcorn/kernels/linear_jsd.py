@@ -2,14 +2,13 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 from popcorn.kernels.jsd import generalized_jsd
 
 
 # The teacher branch is a constant, matching liger.
 @register_kernel(
-    test_shapes={"vocab": Range(2, 4096)},
     test_args={"beta": [0.5], "temperature": [1.0, 2.0]},
     tags={Tag.LOSS, Tag.LINEAR, Tag.FUSED},
 )

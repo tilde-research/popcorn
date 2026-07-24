@@ -5,14 +5,14 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
 # levels must equal ceil(log2(seq)) + 1; singleton test pools keep the grid
 # consistent.
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": {64}, "levels": {7}, "heads": {1}, "key_dim": {64}, "value_dim": {64}},
+    test_shapes={"seq": {64}, "heads": {1}},
     test_inputs={"g": F.logsigmoid, "level_scales": torch.sigmoid},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )

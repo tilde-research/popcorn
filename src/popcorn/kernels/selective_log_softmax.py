@@ -2,20 +2,18 @@ import torch
 from jaxtyping import Bool, Float, Float32, Int
 from torch import Tensor
 
-from popcorn import Range, Tag, register_kernel
+from popcorn import Tag, register_kernel
 from popcorn.kernels._utils import upcast
 
 
-# response_plus must equal response + 1; singleton pools keep the grid
-# consistent with Liger's next-token layout.
+# logits carry one extra position, Liger's next-token layout.
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "response": {31}, "response_plus": {32}, "vocab": Range(2, 4096)},
     test_args={"temperature": [0.9, 1.0]},
     test_inputs={"mask": lambda t: t.bool()},
     tags={Tag.REDUCTION, Tag.FUSED},
 )
 def selective_log_softmax(
-    logits: Float[Tensor, "batch response_plus vocab"],
+    logits: Float[Tensor, "batch response+1 vocab"],
     input_ids: Int[Tensor, "batch response"],
     temperature: float = 0.9,
     mask: Bool[Tensor, "batch response"] | None = None,

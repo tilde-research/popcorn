@@ -3,32 +3,24 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
 @register_kernel(
-    test_shapes={
-        "batch": Range(1, 8),
-        "seq": Range(2, 128),
-        "heads": {4},
-        "kv_heads": {2, 4},
-        "key_dim": {64},
-        "value_dim": {64},
-        "slots": {16},
-    },
+    test_shapes={"kv_heads": {2, 4}},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"g": F.logsigmoid},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def gsa(
-    q: Float[Tensor, "batch seq heads key_dim"],
+    q: Float[Tensor, "batch seq q_heads key_dim"],
     k: Float[Tensor, "batch seq kv_heads key_dim"],
     v: Float[Tensor, "batch seq kv_heads value_dim"],
     s: Float[Tensor, "batch seq kv_heads slots"],
     g: Float[Tensor, "batch seq kv_heads slots"],
     softmax_scale: float | None = None,
-) -> Float[Tensor, "batch seq heads value_dim"]:
+) -> Float[Tensor, "batch seq q_heads value_dim"]:
     r"""Gated slot attention: two chained gated linear-attention passes through softmaxed slots.
 
     $$K_t = K_{t-1} \, \mathrm{diag}\!\big(e^{g_t}\big) + k_t s_t^\top, \quad
@@ -66,7 +58,7 @@ def _no_gqa(**arguments):
 # fp32 and bf16 hold.
 @gsa.register("fla", source="fla.ops.gsa.chunk_gsa", predicate=_no_gqa)
 def gsa_fla(
-    q: Float32[Tensor, "batch seq heads key_dim"] | BFloat16[Tensor, "batch seq heads key_dim"],
+    q: Float32[Tensor, "batch seq q_heads key_dim"] | BFloat16[Tensor, "batch seq q_heads key_dim"],
     k,
     v,
     s,

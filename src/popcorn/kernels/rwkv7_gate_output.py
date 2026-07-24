@@ -6,7 +6,7 @@ from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
-    test_shapes={"batch": Range(1, 2), "seq": Range(2, 16), "heads": {4}, "head_dim": {64}},
+    test_shapes={"batch": Range(1, 2), "seq": Range(2, 16)},
     tags={Tag.ACTIVATION, Tag.FUSED},
 )
 def rwkv7_gate_output(

@@ -36,3 +36,10 @@ def layer_norm_fla(x, weight, bias, eps):
 )
 def layer_norm_liger(x, weight, bias: Float[Tensor, "normalized_shape"], eps):
     return kernel(x, weight, bias, eps)
+
+
+# unsloth's backward returns only the input gradient (weight and bias are
+# assumed frozen), so it is forward-only here; bias must be present.
+@layer_norm.register("unsloth", source="unsloth.kernels.layernorm.Fast_Layernorm.apply", forward_only=True)
+def layer_norm_unsloth(x, weight, bias: Float[Tensor, "normalized_shape"], eps):
+    return kernel(x, weight, bias, eps)

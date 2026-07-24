@@ -21,22 +21,15 @@ def _rotate(x, freqs):
 
 
 @register_kernel(
-    test_shapes={
-        "batch": Range(1, 8),
-        "seq": Range(2, 512),
-        "heads": {4},
-        "kv_heads": {2},
-        "half": {16},
-        "head_dim": {32},
-    },
+    test_shapes={"seq": Range(2, 512), "head_dim": {32}},
     test_inputs={"freqs": _unit_pairs},
     tags={Tag.POSITIONAL},
 )
 def llama4_rope(
-    q: Float[Tensor, "batch seq heads head_dim"],
+    q: Float[Tensor, "batch seq q_heads head_dim"],
     k: Float[Tensor, "batch seq kv_heads head_dim"],
-    freqs: Float[Tensor, "seq half 2"],
-) -> tuple[Float[Tensor, "batch seq heads head_dim"], Float[Tensor, "batch seq kv_heads head_dim"]]:
+    freqs: Float[Tensor, "seq head_dim/2 2"],
+) -> tuple[Float[Tensor, "batch seq q_heads head_dim"], Float[Tensor, "batch seq kv_heads head_dim"]]:
     r"""Paired Llama 4 rotary embedding, frequencies as real/imaginary pairs instead of complex.
 
     $$y_{2j} + i\, y_{2j+1} = (x_{2j} + i\, x_{2j+1}) \, f_{tj}, \qquad |f_{tj}| = 1$$

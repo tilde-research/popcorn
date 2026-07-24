@@ -10,7 +10,7 @@ from popcorn.kernels._utils import default_scale, upcast
 # q and k pass through the paper's positive feature map (elu + 1) so the
 # normalizer never crosses zero; feature-mapped q and k are the caller's job.
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": Range(2, 256), "heads": {4}, "key_dim": {64}, "value_dim": {64}},
+    test_shapes={"seq": Range(2, 256)},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"q": lambda t: F.elu(t) + 1, "k": lambda t: F.elu(t) + 1},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},

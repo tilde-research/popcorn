@@ -53,25 +53,25 @@ def _masked_softmax(scores, valid):
 # the compression softmax (block 0 and the two most recent are always kept,
 # ranking is gradient-free); the sliding window covers the trailing
 # `window_size` positions (branch skipped when 0, `g_swa` unused). Kernels
-# require grouping `heads` a multiple of `16 * kv_heads`, and `block_count`
+# require grouping `q_heads` a multiple of `16 * kv_heads`, and `block_count`
 # at most half of `block_size` (fla `parallel_nsa`).
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": Range(2, 512), "heads": {16}, "kv_heads": {1}, "head_dim": {64}},
+    test_shapes={"seq": Range(2, 512), "q_heads": {16}, "kv_heads": {1}},
     test_args={"block_count": [16], "block_size": [32], "window_size": [0, 64], "softmax_scale": [None, 0.25]},
     tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION, Tag.FUSED},
 )
 def nsa(
-    q: Float[Tensor, "batch seq heads head_dim"],
+    q: Float[Tensor, "batch seq q_heads head_dim"],
     k: Float[Tensor, "batch seq kv_heads head_dim"],
     v: Float[Tensor, "batch seq kv_heads head_dim"],
-    g_cmp: Float[Tensor, "batch seq heads"],
-    g_slc: Float[Tensor, "batch seq heads"],
-    g_swa: Float[Tensor, "batch seq heads"],
+    g_cmp: Float[Tensor, "batch seq q_heads"],
+    g_slc: Float[Tensor, "batch seq q_heads"],
+    g_swa: Float[Tensor, "batch seq q_heads"],
     block_count: int = 16,
     block_size: int = 64,
     window_size: int = 0,
     softmax_scale: float | None = None,
-) -> Float[Tensor, "batch seq heads head_dim"]:
+) -> Float[Tensor, "batch seq q_heads head_dim"]:
     r"""Native sparse attention: gated compression, selection, and sliding-window branches.
 
     $$y = g_{\mathrm{cmp}} \odot \mathrm{Attn}(q, \tilde{k}, \tilde{v})
@@ -83,8 +83,8 @@ def nsa(
     """
     scale = default_scale(softmax_scale, q.shape[-1])
     q32, k32, v32 = map(upcast, (q, k, v))
-    batch, seq, heads, _ = q.shape
-    groups = heads // k.shape[2]
+    batch, seq, q_heads, _ = q.shape
+    groups = q_heads // k.shape[2]
     blocks = -(-seq // block_size)
     t_idx = torch.arange(seq, device=q.device)[:, None]
     j_idx = torch.arange(blocks, device=q.device)[None, :]
@@ -130,7 +130,7 @@ def nsa(
 # fp16 backward noise lands past the harness budget (see ISSUES.md).
 @nsa.register("fla", source="fla.ops.nsa.parallel_nsa", predicate=_fla_ready)
 def nsa_fla(
-    q: BFloat16[Tensor, "batch seq heads head_dim"],
+    q: BFloat16[Tensor, "batch seq q_heads head_dim"],
     k,
     v,
     g_cmp,
@@ -157,7 +157,7 @@ def nsa_fla(
 
 @nsa.register("popcorn", source="popcorn.impls.nsa_tl.nsa", predicate=_popcorn_ready)
 def nsa_popcorn(
-    q: BFloat16[Tensor, "batch seq heads head_dim"],
+    q: BFloat16[Tensor, "batch seq q_heads head_dim"],
     k,
     v,
     g_cmp,

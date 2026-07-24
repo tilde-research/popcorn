@@ -97,21 +97,56 @@ def ensure_available(backend_name: str) -> None:
         declared.warned = True
 
 
-def resolve(path: str) -> Callable[..., Any]:
-    module, _, attr = path.rpartition(".")
-    return getattr(importlib.import_module(module), attr)
+def resolve(path: str) -> Any:
+    """Resolve a dotted source path: import the longest module prefix, then walk
+    attributes. `pkg.mod.Class.apply` reaches methods, and a plain module path
+    serves several callables to its adapter through `kernel` attributes."""
+    segments = path.split(".")
+    found = importlib.import_module(segments[0])
+    consumed = segments[0]
+    for index, segment in enumerate(segments[1:], start=1):
+        candidate = f"{consumed}.{segment}"
+        try:
+            found = importlib.import_module(candidate)
+            consumed = candidate
+        except ModuleNotFoundError as error:
+            # Attributes start only where the module path ends; a missing
+            # dependency inside an existing module surfaces as is.
+            if error.name != candidate:
+                raise
+            for attribute in segments[index:]:
+                found = getattr(found, attribute)
+            return found
+    return found
 
 
 _active_source: ContextVar[Callable[..., Any]] = ContextVar("popcorn_kernel")
 
 
-def kernel(*args: Any, **kwargs: Any) -> Any:
-    """The current backend's source, bound by the dispatcher for the duration of a call."""
-    try:
-        source = _active_source.get()
-    except LookupError:
-        raise RuntimeError("kernel() is only valid inside a backend registered with source=") from None
-    return source(*args, **kwargs)
+class _Kernel:
+    """The current backend's source, bound by the dispatcher for the duration of
+    a call. Calling it calls the source; attribute access reaches into it, so a
+    module source serves several callables (`kernel.matmul`, `kernel.pack_weights`)
+    and a class source serves its methods."""
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        try:
+            source = _active_source.get()
+        except LookupError:
+            raise RuntimeError("kernel() is only valid inside a backend registered with source=") from None
+        return source(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        # AttributeError, not RuntimeError: introspection probes the unbound
+        # proxy (hasattr, getattr with a default) and must see a plain miss.
+        try:
+            source = _active_source.get()
+        except LookupError:
+            raise AttributeError(f"kernel.{name} is only valid inside a backend registered with source=") from None
+        return getattr(source, name)
+
+
+kernel = _Kernel()
 
 
 @contextmanager

@@ -2,13 +2,12 @@ import torch
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
 # The window clamps at sequence boundaries (liger convention, unlike NATTEN).
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "heads": {4}, "seq": Range(2, 128), "head_dim": {64}},
     test_args={"kernel_size": [3, 7], "dilation": [1, 2], "softmax_scale": [None, 0.25]},
     tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION},
 )

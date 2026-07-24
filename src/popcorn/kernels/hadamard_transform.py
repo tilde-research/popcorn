@@ -6,8 +6,8 @@ from popcorn import Pow2, Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
-@register_kernel(test_shapes={"dim": Pow2()}, test_args={"scale": [1.0, 0.5]}, tags={Tag.LINEAR})
-def hadamard_transform(x: Float[Tensor, "... dim"], scale: float = 1.0) -> Float[Tensor, "... dim"]:
+@register_kernel(test_shapes={"hidden": Pow2()}, test_args={"scale": [1.0, 0.5]}, tags={Tag.LINEAR})
+def hadamard_transform(x: Float[Tensor, "... hidden"], scale: float = 1.0) -> Float[Tensor, "... hidden"]:
     r"""Sylvester Hadamard transform along the last dimension (a power of two).
 
     $$y = s \, x H_d, \qquad H_{2d} = \begin{pmatrix} H_d & H_d \\ H_d & -H_d \end{pmatrix}$$

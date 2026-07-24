@@ -8,7 +8,7 @@ from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
-    test_shapes={"batch": Range(1, 4), "seq": Range(2, 64), "heads": {4}, "key_dim": {32}},
+    test_shapes={"batch": Range(1, 4), "seq": Range(2, 64), "key_dim": {32}},
     test_inputs={"g": F.logsigmoid, "beta": torch.sigmoid, "lamb": F.softplus},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )

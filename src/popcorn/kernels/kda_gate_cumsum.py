@@ -8,7 +8,7 @@ from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
-    test_shapes={"batch": {1}, "seq": {9}, "heads": {2}, "width": {16}},
+    test_shapes={"batch": {1}, "seq": {9}, "heads": {2}},
     test_args={"chunk_size": [4], "scale": [None, 0.5], "lower_bound": [None, -5.0]},
     test_inputs={"A_log": lambda x: x * 0.1, "dt_bias": lambda x: x * 0.1},
     tags={Tag.ACTIVATION, Tag.REDUCTION, Tag.FUSED},

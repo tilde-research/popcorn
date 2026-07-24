@@ -3,14 +3,13 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
 # `a` is the in-context erase direction (unit norm, negative) and `b` its
 # replacement.
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": Range(2, 128), "heads": {4}, "key_dim": {64}, "value_dim": {64}},
     test_args={"softmax_scale": [1.0, 0.25]},
     test_inputs={
         "w": F.logsigmoid,

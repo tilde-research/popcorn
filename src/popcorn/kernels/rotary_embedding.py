@@ -10,7 +10,7 @@ from popcorn.kernels._utils import upcast
 # the grid consistent. Partial rotary (head_dim > 2 * half) also dispatches.
 # cos/sin are constants, matching the kernels.
 @register_kernel(
-    test_shapes={"batch": Range(1, 128), "seq": Range(2, 512), "heads": {4}, "half": {16}, "head_dim": {32}},
+    test_shapes={"batch": Range(1, 128), "seq": Range(2, 512), "head_dim": {32}},
     tags={Tag.POSITIONAL},
 )
 def rotary_embedding(

@@ -3,14 +3,13 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
 # The correction reads the pre-decay state (fla's chunk kernel; their naive
 # recurrence reads post-decay and disagrees, see ISSUES.md).
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": Range(2, 128), "heads": {4}, "key_dim": {64}, "value_dim": {64}},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={
         "k": lambda t: F.normalize(t, dim=-1),

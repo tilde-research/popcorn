@@ -1,6 +1,7 @@
 """Shape grammar parsed from jaxtyping annotations on kernel references."""
 
 import inspect
+import re
 import typing
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -9,7 +10,25 @@ from typing import Any
 
 from popcorn.core.errors import DispatchError
 
-DimToken = str | int | EllipsisType
+
+@dataclass(frozen=True, slots=True)
+class Derived:
+    """A dim derived from another: `base (+|-|*|/) operand`, the operand an int
+    literal or a scalar parameter. Derived sizes are never their own dims: they
+    are computed by the grid and validated (or inverted to bind the base) at
+    call time."""
+
+    base: str
+    op: str
+    operand: int | str
+
+    def __str__(self) -> str:
+        return f"{self.base}{self.op}{self.operand}"
+
+
+DimToken = str | int | EllipsisType | Derived
+
+_EXPRESSION = re.compile(r"^(?P<base>[^\W\d]\w*)(?P<op>[+\-*/])(?P<operand>\w+)$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +57,13 @@ def _token(text: str, param: str) -> DimToken:
         return int(text)
     if text.isidentifier():
         return text
-    raise TypeError(f"{param}: unsupported dim token {text!r}; references may use names, ints, and '...'")
+    if match := _EXPRESSION.match(text):
+        operand = match["operand"]
+        return Derived(match["base"], match["op"], int(operand) if operand.isdigit() else operand)
+    raise TypeError(
+        f"{param}: unsupported dim token {text!r}; references may use names, ints, '...', "
+        "and one derivation `name(+|-|*|/)k` with k an int or a scalar parameter"
+    )
 
 
 def plans(signature: inspect.Signature) -> tuple[TensorSpec, ...]:
@@ -52,11 +77,70 @@ def plans(signature: inspect.Signature) -> tuple[TensorSpec, ...]:
         if tokens.count(...) > 1:
             raise TypeError(f"{name}: at most one '...' per annotation")
         specs.append(TensorSpec(name, tokens, getattr(annotation, "dtypes", ()), optional))
+    tensors = {spec.param for spec in specs}
+    for spec in specs:
+        for token in spec.tokens:
+            if isinstance(token, Derived) and isinstance(token.operand, str) and token.operand not in signature.parameters:
+                raise TypeError(f"{spec.param}: dim {token}: operand {token.operand!r} is not a parameter")
+            if isinstance(token, Derived) and token.operand in tensors:
+                raise TypeError(f"{spec.param}: dim {token}: operand {token.operand!r} must be a scalar parameter")
     return tuple(specs)
 
 
 def dim_names(specs: Iterable[TensorSpec]) -> set[str]:
-    return {t for spec in specs for t in spec.tokens if isinstance(t, str)}
+    names = set()
+    for spec in specs:
+        for token in spec.tokens:
+            if isinstance(token, str):
+                names.add(token)
+            elif isinstance(token, Derived):
+                names.add(token.base)
+    return names
+
+
+def _operand(token: Derived, args: Mapping[str, Any], param: str) -> int:
+    value = token.operand if isinstance(token.operand, int) else args.get(token.operand)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise DispatchError(f"{param}: dim {token} needs a positive int {token.operand!r}, got {value!r}")
+    return value
+
+
+def _apply(token: Derived, base: int, k: int, param: str) -> int:
+    match token.op:
+        case "+":
+            return base + k
+        case "-":
+            return base - k
+        case "*":
+            return base * k
+        case _:
+            if base % k:
+                raise DispatchError(f"{param}: dim {token}: {token.base}={base} is not divisible by {k}")
+            return base // k
+
+
+def _invert(token: Derived, size: int, k: int, param: str) -> int:
+    match token.op:
+        case "+":
+            return size - k
+        case "-":
+            return size + k
+        case "*":
+            if size % k:
+                raise DispatchError(f"{param}: dim {token}: size {size} is not a multiple of {k}")
+            return size // k
+        case _:
+            return size * k
+
+
+def token_size(token: DimToken, dims: Mapping[str, int], args: Mapping[str, Any], param: str = "?") -> int:
+    """The concrete size of one non-variadic token given bound dims and scalar arguments."""
+    if isinstance(token, int):
+        return token
+    if isinstance(token, str):
+        return dims[token]
+    assert isinstance(token, Derived)
+    return _apply(token, dims[token.base], _operand(token, args, param), param)
 
 
 def extract(specs: Iterable[TensorSpec], args: Mapping[str, Any]) -> dict[str, int]:
@@ -82,8 +166,19 @@ def extract(specs: Iterable[TensorSpec], args: Mapping[str, Any]) -> dict[str, i
             if isinstance(token, int):
                 if token != size:
                     raise DispatchError(f"{spec.param}: expected dim of {token}, got {size}")
-            elif isinstance(token, str) and dims.setdefault(token, size) != size:
-                raise DispatchError(f"dim {token!r}: {spec.param} has {size}, other arguments have {dims[token]}")
+            elif isinstance(token, str):
+                if dims.setdefault(token, size) != size:
+                    raise DispatchError(f"dim {token!r}: {spec.param} has {size}, other arguments have {dims[token]}")
+            elif isinstance(token, Derived):
+                k = _operand(token, args, spec.param)
+                if token.base in dims:
+                    expected = _apply(token, dims[token.base], k, spec.param)
+                    if size != expected:
+                        raise DispatchError(
+                            f"dim {token}: {spec.param} has {size}, expected {expected} ({token.base}={dims[token.base]})"
+                        )
+                else:
+                    dims[token.base] = _invert(token, size, k, spec.param)
     return dims
 
 

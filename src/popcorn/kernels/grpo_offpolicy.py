@@ -2,33 +2,32 @@ import torch
 from jaxtyping import Float, Float32, Int
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
 # Returns (per-token loss, optional KL, clipping indicator), matching Liger's
 # GrpoLossFunction.
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "resp": {31}, "resp_plus": {32}, "vocab": Range(2, 4096)},
     test_args={"temperature": [0.9], "beta": [0.0, 0.04], "eps_low": [0.2], "eps_high": [0.4]},
     test_inputs={"completion_mask": lambda t: (t > 0).float()},
     tags={Tag.LOSS, Tag.FUSED},
 )
 def grpo_offpolicy(
-    logits: Float[Tensor, "batch resp_plus vocab"],
-    old_logp: Float[Tensor, "batch resp"],
-    ref_logp: Float[Tensor, "batch resp"],
-    completion_ids: Int[Tensor, "batch resp"],
+    logits: Float[Tensor, "batch response+1 vocab"],
+    old_logp: Float[Tensor, "batch response"],
+    ref_logp: Float[Tensor, "batch response"],
+    completion_ids: Int[Tensor, "batch response"],
     advantages: Float[Tensor, "batch"],
-    completion_mask: Float[Tensor, "batch resp"] | None = None,
+    completion_mask: Float[Tensor, "batch response"] | None = None,
     temperature: float = 0.9,
     beta: float = 0.04,
     eps_low: float = 0.2,
     eps_high: float = 0.4,
 ) -> tuple[
-    Float32[Tensor, "batch resp"],
-    Float32[Tensor, "batch resp"] | None,
-    Float32[Tensor, "batch resp"],
+    Float32[Tensor, "batch response"],
+    Float32[Tensor, "batch response"] | None,
+    Float32[Tensor, "batch response"],
 ]:
     r"""Clipped off-policy GRPO loss with a KL penalty against the reference policy.
 

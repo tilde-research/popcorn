@@ -16,17 +16,17 @@ def _state(s):
 # The effective decay is -exp(w); the running numerator, denominator, and
 # their shared log offset travel in `state`, matching fla.
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": Range(2, 128), "chans": Range(8, 1024)},
+    test_shapes={"channels": Range(8, 1024)},
     test_inputs={"state": _state},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
 def rwkv4(
-    w: Float[Tensor, "chans"],
-    u: Float[Tensor, "chans"],
-    k: Float[Tensor, "batch seq chans"],
-    v: Float[Tensor, "batch seq chans"],
-    state: Float[Tensor, "batch 3 1 chans"],
-) -> tuple[Float[Tensor, "batch seq chans"], Float[Tensor, "batch 3 1 chans"]]:
+    w: Float[Tensor, "channels"],
+    u: Float[Tensor, "channels"],
+    k: Float[Tensor, "batch seq channels"],
+    v: Float[Tensor, "batch seq channels"],
+    state: Float[Tensor, "batch 3 1 channels"],
+) -> tuple[Float[Tensor, "batch seq channels"], Float[Tensor, "batch 3 1 channels"]]:
     r"""RWKV-4 wkv: a per-channel EMA of values weighted by exp(k), with a current-token bonus.
 
     $$o_t = \frac{a_{t-1} + e^{u + k_t} v_t}{b_{t-1} + e^{u + k_t}},
@@ -59,5 +59,5 @@ def rwkv4(
 # dtype and 16-bit quantization of the log offset wrecks the backward; see
 # ISSUES.md.
 @rwkv4.register("fla", source="fla.ops.rwkv4.fused_recurrent_rwkv4")
-def rwkv4_fla(w: Float32[Tensor, "chans"], u, k, v, state):
+def rwkv4_fla(w: Float32[Tensor, "channels"], u, k, v, state):
     return kernel(w, u, k, v, state)

@@ -8,18 +8,18 @@ from popcorn import Range, Tag, kernel, register_kernel
 
 
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": Range(2, 512), "heads": {4}, "kv_heads": {2}, "head_dim": {64}},
+    test_shapes={"seq": Range(2, 512)},
     test_args={"softmax_scale": [None, 0.25]},
     tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION},
 )
 def attn(
-    q: Float[Tensor, "batch seq heads head_dim"],
+    q: Float[Tensor, "batch seq q_heads head_dim"],
     k: Float[Tensor, "batch seq kv_heads head_dim"],
     v: Float[Tensor, "batch seq kv_heads head_dim"],
     causal: bool = False,
     softmax_scale: float | None = None,
-) -> Float[Tensor, "batch seq heads head_dim"]:
-    r"""Multi-head attention with grouped kv heads (heads must divide evenly).
+) -> Float[Tensor, "batch seq q_heads head_dim"]:
+    r"""Multi-head attention with grouped kv heads (q_heads must divide evenly).
 
     $$y = \operatorname{softmax}\!\left(\frac{q k^\top}{\sqrt{d}} + M\right) v$$
 
@@ -40,7 +40,7 @@ def attn(
 
 @attn.register("fa3", source="flash_attn_interface.flash_attn_func")
 def attn_fa3(
-    q: Float16[Tensor, "batch seq heads head_dim"] | BFloat16[Tensor, "batch seq heads head_dim"],
+    q: Float16[Tensor, "batch seq q_heads head_dim"] | BFloat16[Tensor, "batch seq q_heads head_dim"],
     k,
     v,
     causal,
@@ -53,7 +53,7 @@ def attn_fa3(
 # misses the float32 tolerance.
 @attn.register("fla", source="fla.ops.attn.parallel_attn")
 def attn_fla(
-    q: Float16[Tensor, "batch seq heads head_dim"] | BFloat16[Tensor, "batch seq heads head_dim"],
+    q: Float16[Tensor, "batch seq q_heads head_dim"] | BFloat16[Tensor, "batch seq q_heads head_dim"],
     k,
     v,
     causal: Literal[True],

@@ -410,6 +410,47 @@ class TestRegistration:
         with pytest.raises(TypeError, match="register an adapter"):
             d(torch.ones(2))
 
+    def test_source_attribute_chain(self):
+        assert popcorn.core.sources.resolve("torch.Tensor.mul") is torch.Tensor.mul
+
+        def op(input, other=3):
+            return input * other
+
+        d = Dispatcher(op)
+
+        @d.register("stub", source="torch.Tensor.mul")
+        def op_stub(input, other):
+            return kernel(input, other)
+
+        assert d(torch.ones(2), 3, backend="stub").tolist() == [3.0, 3.0]
+
+    def test_source_module_serves_attributes(self):
+        def op(x):
+            return x + 1
+
+        d = Dispatcher(op)
+
+        @d.register("stub", source="operator")
+        def op_stub(x):
+            return kernel.add(x, kernel.abs(-torch.ones_like(x)))
+
+        assert d(torch.zeros(2), backend="stub").tolist() == [1.0, 1.0]
+
+    def test_source_reaches_unimported_submodules(self):
+        # importing a package does not bind its submodules as attributes; the
+        # resolver must import down the module path, not getattr along it.
+        sys.modules.pop("logging.handlers", None)
+        emit = popcorn.core.sources.resolve("logging.handlers.RotatingFileHandler.emit")
+        import logging.handlers
+
+        assert emit is logging.handlers.RotatingFileHandler.emit
+
+    def test_source_missing_dependency_surfaces(self, tmp_path, monkeypatch):
+        (tmp_path / "broken_backend_mod.py").write_text("import missing_dependency_xyz\n")
+        monkeypatch.syspath_prepend(str(tmp_path))
+        with pytest.raises(ModuleNotFoundError, match="missing_dependency_xyz"):
+            popcorn.core.sources.resolve("broken_backend_mod.Function.apply")
+
     def test_empty_registration_rejected(self):
         op = make_op()
         op.register("empty")
@@ -921,6 +962,26 @@ class TestKernelAmbient:
     def test_kernel_outside_dispatch_raises(self):
         with pytest.raises(RuntimeError, match="only valid inside"):
             kernel(1)
+
+    def test_unbound_kernel_survives_introspection(self):
+        # fingerprinting and other tooling probe attributes on the unbound
+        # proxy; those probes must see a plain attribute miss, not an error.
+        assert getattr(kernel, "__wrapped__", None) is None
+        assert not hasattr(kernel, "matmul")
+        with pytest.raises(AttributeError, match="only valid inside"):
+            kernel.matmul  # noqa: B018
+
+    def test_kernel_attribute_adapter_fingerprints(self):
+        def op(x):
+            return x
+
+        d = Dispatcher(op)
+
+        @d.register("stub", source="operator")
+        def adapter(x):
+            return kernel.add(x, torch.zeros_like(x))
+
+        assert fingerprint(adapter) is not None
 
     def test_nesting_restores_outer_source(self):
         def op(x):

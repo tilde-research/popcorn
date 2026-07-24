@@ -2,7 +2,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Tag, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
 @register_kernel(tags={Tag.ACTIVATION, Tag.FEATURE_MIXER, Tag.FUSED})
@@ -18,3 +18,11 @@ def geglu(a: Float[Tensor, "... hidden"], b: Float[Tensor, "... hidden"]) -> Flo
 
 
 geglu.register("liger", source="liger_kernel.transformers.functional.liger_geglu")
+
+
+# unsloth ships only the fused forward for the tanh-approximate GELU; the kernel
+# is elementwise but expects a 3-D tensor.
+@geglu.register("unsloth", source="unsloth.kernels.geglu.geglu_approx_forward_kernel", forward_only=True)
+def geglu_unsloth(a, b):
+    hidden = a.shape[-1]
+    return kernel(a.reshape(1, -1, hidden), b.reshape(1, -1, hidden)).reshape(a.shape)

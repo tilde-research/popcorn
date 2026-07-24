@@ -6,26 +6,25 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float16, Int32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._varlen import cuts
 
 
 # Sequences are packed along `total` in the flash-attention varlen layout,
 # delimited by cu_seqlens offsets. Grouped kv heads as in `attn`.
 @register_kernel(
-    test_shapes={"total": Range(8, 2048), "boundaries": Range(2, 9), "heads": {4}, "kv_heads": {2}, "head_dim": {64}},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"cu_seqlens": cuts},
     tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION, Tag.VARLEN},
 )
 def attn_varlen(
-    q: Float[Tensor, "total heads head_dim"],
+    q: Float[Tensor, "total q_heads head_dim"],
     k: Float[Tensor, "total kv_heads head_dim"],
     v: Float[Tensor, "total kv_heads head_dim"],
     cu_seqlens: Int32[Tensor, "boundaries"],
     causal: bool = False,
     softmax_scale: float | None = None,
-) -> Float[Tensor, "total heads head_dim"]:
+) -> Float[Tensor, "total q_heads head_dim"]:
     r"""Attention over packed variable-length sequences, each attended independently.
 
     $$y^{(s)} = \operatorname{softmax}\!\left(\frac{q^{(s)} {k^{(s)}}^\top}{\sqrt{d}} + M\right) v^{(s)}$$
@@ -52,7 +51,7 @@ def attn_varlen(
 
 @attn_varlen.register("fa3", source="flash_attn_interface.flash_attn_varlen_func")
 def attn_varlen_fa3(
-    q: Float16[Tensor, "total heads head_dim"] | BFloat16[Tensor, "total heads head_dim"],
+    q: Float16[Tensor, "total q_heads head_dim"] | BFloat16[Tensor, "total q_heads head_dim"],
     k,
     v,
     cu_seqlens,
@@ -76,7 +75,7 @@ def attn_varlen_fa3(
 # 16-bit only, causal only: same triton kernel as `attn`, batch folded to 1.
 @attn_varlen.register("fla", source="fla.ops.attn.parallel_attn")
 def attn_varlen_fla(
-    q: Float16[Tensor, "total heads head_dim"] | BFloat16[Tensor, "total heads head_dim"],
+    q: Float16[Tensor, "total q_heads head_dim"] | BFloat16[Tensor, "total q_heads head_dim"],
     k,
     v,
     cu_seqlens,

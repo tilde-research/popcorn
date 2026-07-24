@@ -4,12 +4,10 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32, Int
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
-@register_kernel(
-    test_shapes={"vocab": Range(2, 4096)}, test_args={"label_smoothing": [0.0, 0.1]}, tags={Tag.LOSS, Tag.LINEAR, Tag.FUSED}
-)
+@register_kernel(test_args={"label_smoothing": [0.0, 0.1]}, tags={Tag.LOSS, Tag.LINEAR, Tag.FUSED})
 def linear_cross_entropy(
     x: Float[Tensor, "tokens hidden"],
     weight: Float[Tensor, "vocab hidden"],

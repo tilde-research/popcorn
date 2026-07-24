@@ -4,14 +4,13 @@ import torch
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
 # Slot scores `s` are normalized online into forget gates, then read through
 # a softmax over the slots.
 @register_kernel(
-    test_shapes={"batch": Range(1, 8), "seq": Range(2, 128), "heads": {4}, "key_dim": {64}, "value_dim": {64}, "slots": {16}},
     test_args={"softmax_scale": [None, 0.25]},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )
