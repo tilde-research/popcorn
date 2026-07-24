@@ -451,6 +451,17 @@ class TestRegistration:
         with pytest.raises(ModuleNotFoundError, match="missing_dependency_xyz"):
             popcorn.core.sources.resolve("broken_backend_mod.Function.apply")
 
+    def test_source_prefers_attribute_over_shadowing_submodule(self, tmp_path, monkeypatch):
+        # fla-style layout: pkg/fn.py defines fn, pkg/__init__.py re-exports it,
+        # so "pkg.fn" names both a module and the function. `from pkg import fn`
+        # yields the function; resolve must agree.
+        package = tmp_path / "shadow_pkg"
+        package.mkdir()
+        (package / "fn.py").write_text("def fn():\n    return 'callable'\n")
+        (package / "__init__.py").write_text("from shadow_pkg.fn import fn\n")
+        monkeypatch.syspath_prepend(str(tmp_path))
+        assert popcorn.core.sources.resolve("shadow_pkg.fn")() == "callable"
+
     def test_empty_registration_rejected(self):
         op = make_op()
         op.register("empty")

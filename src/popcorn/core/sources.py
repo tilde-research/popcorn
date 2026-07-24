@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from types import ModuleType
 from typing import Any
 
 from packaging.version import Version
@@ -98,25 +99,24 @@ def ensure_available(backend_name: str) -> None:
 
 
 def resolve(path: str) -> Any:
-    """Resolve a dotted source path: import the longest module prefix, then walk
-    attributes. `pkg.mod.Class.apply` reaches methods, and a plain module path
-    serves several callables to its adapter through `kernel` attributes."""
+    """Resolve a dotted source path segment by segment, preferring attributes
+    over same-named submodules like `from x import y` does — `fla.ops.utils.solve_tril`
+    is the re-exported function, not its defining module. `pkg.mod.Class.apply`
+    reaches methods, and a plain module path serves several callables to its
+    adapter through `kernel` attributes."""
     segments = path.split(".")
-    found = importlib.import_module(segments[0])
-    consumed = segments[0]
-    for index, segment in enumerate(segments[1:], start=1):
-        candidate = f"{consumed}.{segment}"
+    found: Any = importlib.import_module(segments[0])
+    prefix = segments[0]
+    for segment in segments[1:]:
+        prefix = f"{prefix}.{segment}"
         try:
-            found = importlib.import_module(candidate)
-            consumed = candidate
-        except ModuleNotFoundError as error:
-            # Attributes start only where the module path ends; a missing
-            # dependency inside an existing module surfaces as is.
-            if error.name != candidate:
+            found = getattr(found, segment)
+        except AttributeError:
+            if not isinstance(found, ModuleType):
                 raise
-            for attribute in segments[index:]:
-                found = getattr(found, attribute)
-            return found
+            # Not yet imported (or genuinely absent): a missing dependency
+            # inside an existing module surfaces as is.
+            found = importlib.import_module(prefix)
     return found
 
 

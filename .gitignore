@@ -10,3 +10,4 @@ build/
 logs/
 **/reports/shards/
 **/reports/index.html
+*.jsonl.lock
