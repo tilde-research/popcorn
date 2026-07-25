@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
@@ -14,7 +14,6 @@ def _fla_supported(g, A_log, dt_bias, lower_bound):
 
 # gate_dim must equal heads * key_dim; singleton pools keep the grid valid.
 @register_kernel(
-    test_shapes={"batch": Range(1, 4), "seq": {32}, "key_dim": {32}},
     test_args={"lower_bound": [None, -5.0]},
     test_inputs={
         "g": lambda t: 2 * t,
@@ -48,17 +47,6 @@ def kda_gate(
     return out.float()
 
 
-@kda_gate.register(
-    "fla",
-    source="fla.ops.kda.gate.fused_kda_gate",
-    supports={"key_dim": Range(1, 128)},
-    predicate=_fla_supported,
-)
+@kda_gate.register("fla", source="fla.ops.kda.gate.fused_kda_gate", predicate=_fla_supported)
 def kda_gate_fla(g, A_log, dt_bias, lower_bound):
-    return kernel(
-        g,
-        A_log,
-        dt_bias,
-        lower_bound=lower_bound,
-        output_dtype=torch.float32,
-    )
+    return kernel(g, A_log, dt_bias, lower_bound=lower_bound, output_dtype=torch.float32)

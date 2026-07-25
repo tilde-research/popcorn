@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
@@ -21,7 +21,6 @@ def _momoe_deps(**_):
 # Routing is softmax-then-topk with the picked probabilities renormalized to
 # sum 1; the selection itself is gradient-free.
 @register_kernel(
-    test_shapes={"seq": Range(2, 256), "hidden": {64}, "intermediate": {128}},
     test_args={"top_k": [1, 6]},
     test_inputs={
         "gate_weight": lambda t: t / t.shape[1] ** 0.5,

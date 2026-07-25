@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
@@ -12,13 +12,6 @@ def _unit(t):
 
 
 @register_kernel(
-    test_shapes={
-        "batch": Range(1, 4),
-        "seq": Range(2, 64),
-        "heads": {2},
-        "key_dim": {32},
-        "value_dim": {32},
-    },
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"a": _unit, "b": lambda t: -_unit(t), "initial_state": lambda t: 0.1 * t},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
@@ -53,27 +46,6 @@ def iplr_delta_rule(
     return torch.stack(outs, 1).to(v.dtype), state.float()
 
 
-@iplr_delta_rule.register(
-    "fla",
-    source="fla.ops.generalized_delta_rule.fused_recurrent_iplr_delta_rule",
-    supports={"key_dim": Range(1, 128)},
-)
-def iplr_delta_rule_fla(
-    q,
-    k,
-    v,
-    a,
-    b,
-    initial_state,
-    softmax_scale,
-):
-    return kernel(
-        q,
-        k,
-        v,
-        a,
-        b,
-        scale=softmax_scale,
-        initial_state=initial_state,
-        output_final_state=True,
-    )
+@iplr_delta_rule.register("fla", source="fla.ops.generalized_delta_rule.fused_recurrent_iplr_delta_rule")
+def iplr_delta_rule_fla(q, k, v, a, b, initial_state, softmax_scale):
+    return kernel(q, k, v, a, b, scale=softmax_scale, initial_state=initial_state, output_final_state=True)

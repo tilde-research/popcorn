@@ -3,14 +3,13 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
 # q and k pass through the paper's positive feature map (elu + 1) so the
 # normalizer never crosses zero; feature-mapped q and k are the caller's job.
 @register_kernel(
-    test_shapes={"seq": Range(2, 256)},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"q": lambda t: F.elu(t) + 1, "k": lambda t: F.elu(t) + 1},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},

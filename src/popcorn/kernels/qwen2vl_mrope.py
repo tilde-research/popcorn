@@ -2,7 +2,7 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, register_kernel
+from popcorn import Tag, register_kernel
 
 
 def _rotate_half(x):
@@ -18,7 +18,6 @@ def _table(f):
 # mrope_section must sum to head_dim / 2; singleton test pools keep the grid
 # consistent. cos/sin are constants, matching liger.
 @register_kernel(
-    test_shapes={"seq": Range(2, 512), "head_dim": {32}},
     test_args={"mrope_section": [[8, 4, 4]]},
     test_inputs={"cos": _table(torch.cos), "sin": _table(torch.sin)},
     tags={Tag.POSITIONAL},

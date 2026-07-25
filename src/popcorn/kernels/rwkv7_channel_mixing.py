@@ -2,16 +2,10 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
 @register_kernel(
-    test_shapes={
-        "batch": Range(1, 2),
-        "seq": Range(2, 32),
-        "hidden": {64},
-        "intermediate": {128},
-    },
     test_inputs={
         "x_k": torch.sigmoid,
         "key_weight": lambda t: t / t.shape[0] ** 0.5,

@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
@@ -20,7 +20,6 @@ def _fla_supported(q, k, v, block_size, softmax_scale):
 # A compressed block becomes visible at the token that completes it. Rows
 # before the first complete block return zero output and zero log-sum-exp.
 @register_kernel(
-    test_shapes={"batch": Range(1, 4), "seq": {64}, "q_heads": {16}, "kv_heads": {1}},
     test_args={"block_size": [32], "softmax_scale": [None, 0.25]},
     test_inputs={"k": lambda t: F.normalize(t, dim=-1)},
     tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION},
@@ -66,12 +65,7 @@ def nsa_compression(
     return out.to(v.dtype).to(q.dtype), lse.detach() + anchor
 
 
-@nsa_compression.register(
-    "fla",
-    source="fla.ops.nsa.compression.parallel_nsa_compression",
-    supports={"key_dim": Range(1, 128)},
-    predicate=_fla_supported,
-)
+@nsa_compression.register("fla", source="fla.ops.nsa.compression.parallel_nsa_compression", predicate=_fla_supported)
 def nsa_compression_fla(
     q: Float32[Tensor, "batch seq q_heads key_dim"] | BFloat16[Tensor, "batch seq q_heads key_dim"],
     k,

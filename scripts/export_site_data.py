@@ -88,7 +88,6 @@ def card(op) -> dict:
                 "name": b.name,
                 "source": b.source,
                 "forward_only": b.forward_only,
-                "supports": {dim: str(constraint) for dim, constraint in b.supports.items()},
             }
             for b in op._backends
         ],

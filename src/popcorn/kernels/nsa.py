@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
@@ -56,7 +56,6 @@ def _masked_softmax(scores, valid):
 # require grouping `q_heads` a multiple of `16 * kv_heads`, and `block_count`
 # at most half of `block_size` (fla `parallel_nsa`).
 @register_kernel(
-    test_shapes={"seq": Range(2, 512), "q_heads": {16}, "kv_heads": {1}},
     test_args={"block_count": [16], "block_size": [32], "window_size": [0, 64], "softmax_scale": [None, 0.25]},
     tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION, Tag.FUSED},
 )

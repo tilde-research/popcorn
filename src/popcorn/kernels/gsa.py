@@ -8,7 +8,6 @@ from popcorn.kernels._utils import default_scale, upcast
 
 
 @register_kernel(
-    test_shapes={"kv_heads": {2, 4}},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"g": F.logsigmoid},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},

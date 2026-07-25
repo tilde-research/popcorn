@@ -3,12 +3,11 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
-    test_shapes={"batch": Range(1, 4), "seq": Range(2, 64), "key_dim": {32}},
     test_inputs={"g": F.logsigmoid, "beta": torch.sigmoid, "lamb": F.softplus},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )

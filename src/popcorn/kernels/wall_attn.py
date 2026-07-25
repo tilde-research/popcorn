@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 RCP_LN2 = 1.4426950408889634
@@ -24,7 +24,6 @@ def _wall_deps(**_):
 # diverges from the reference by ~10-40% (its own upstream tests only cover this
 # decay domain); `sink_bias` is a small per-head sink logit.
 @register_kernel(
-    test_shapes={"seq": Range(2, 512)},
     test_args={"softmax_scale": [None, 0.25], "window_size": [None, 128]},
     test_inputs={"g": F.logsigmoid, "g_scalar": F.logsigmoid, "sink_bias": lambda t: t * 0.1},
     tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION},

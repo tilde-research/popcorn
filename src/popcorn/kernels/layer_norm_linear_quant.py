@@ -2,7 +2,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._quant import activation_quant, weight_quant
 
 
@@ -28,10 +28,6 @@ def layer_norm_linear_quant(
 
 # rows of one element are degenerate (grad x is exactly zero); fla's backward
 # returns junk there.
-@layer_norm_linear_quant.register(
-    "fla",
-    source="fla.modules.fused_bitlinear.layer_norm_linear_quant_fn",
-    supports={"hidden": Range(2, 1 << 20)},
-)
+@layer_norm_linear_quant.register("fla", source="fla.modules.fused_bitlinear.layer_norm_linear_quant_fn")
 def layer_norm_linear_quant_fla(x, norm_weight, norm_bias, linear_weight, linear_bias, eps):
     return kernel(x, norm_weight, norm_bias, linear_weight, linear_bias, eps=eps)

@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float16
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
@@ -11,7 +11,6 @@ from popcorn.kernels._utils import default_scale, upcast
 # softmax((qk + gate) * scale), following the fla kernel. `w` should be
 # unit-norm, `beta` in [0, 2].
 @register_kernel(
-    test_shapes={"batch": Range(1, 4)},
     test_args={"softmax_scale": [None, 0.25]},
     test_inputs={"w": lambda t: F.normalize(t, dim=-1), "beta": lambda t: 2 * torch.sigmoid(t), "g": F.logsigmoid},
     tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION, Tag.POSITIONAL},

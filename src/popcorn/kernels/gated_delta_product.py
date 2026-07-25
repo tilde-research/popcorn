@@ -9,7 +9,6 @@ from popcorn.kernels._utils import default_scale, upcast
 
 # k, v, and beta hold num_householder entries per step (fla's contract).
 @register_kernel(
-    test_shapes={"seq": {32}},
     test_args={"num_householder": [2], "softmax_scale": [None, 0.25]},
     test_inputs={"k": lambda t: F.normalize(t, dim=-1), "beta": torch.sigmoid, "g": F.logsigmoid},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},

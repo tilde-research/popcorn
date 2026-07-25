@@ -2,7 +2,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
 @register_kernel(test_args={"eps": [1e-6, 1e-5]}, tags={Tag.NORMALIZATION, Tag.LINEAR, Tag.FUSED, Tag.FEATURE_MIXER})
@@ -26,6 +26,6 @@ def layer_norm_linear(
 
 # rows of one element are degenerate (grad x is exactly zero); fla's backward
 # returns junk there.
-@layer_norm_linear.register("fla", source="fla.modules.layernorm.layer_norm_linear", supports={"hidden": Range(2, 1 << 20)})
+@layer_norm_linear.register("fla", source="fla.modules.layernorm.layer_norm_linear")
 def layer_norm_linear_fla(x, norm_weight, norm_bias, linear_weight, linear_bias, eps):
     return kernel(x, norm_weight, norm_bias, linear_weight, linear_bias, eps=eps)

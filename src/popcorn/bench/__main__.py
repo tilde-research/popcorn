@@ -1,4 +1,4 @@
-"""CLI harness: run/merge/view the grid locally or submit it as a slurm array."""
+"""CLI harness: run/merge/view/map locally or submit as a slurm array."""
 
 import argparse
 import json
@@ -14,8 +14,9 @@ import popcorn.kernels  # noqa: F401
 from popcorn import KERNELS
 from popcorn.bench.grid import cases
 from popcorn.bench.model import Case, Record
+from popcorn.bench.plan import EFFORT, plan
 from popcorn.bench.report import refresh
-from popcorn.bench.store import BUNDLED_REPORTS, read, read_file, user_reports, write
+from popcorn.bench.store import BUNDLED_REPORTS, Store, read, read_file, user_reports, write
 from popcorn.bench.viewer import render
 from popcorn.core.dispatcher import Dispatcher
 
@@ -149,6 +150,53 @@ def cmd_view(args: argparse.Namespace) -> None:
     print(f"{len(records)} rows -> {out}")
 
 
+def cmd_map(args: argparse.Namespace) -> None:
+    """Fill validity regions by running the adaptive planner to fixpoint."""
+    store = Store()
+    ops = [KERNELS[name] for name in args.ops] if args.ops else list(KERNELS.values())
+    total = 0
+    for op in ops:
+        backends = [name for name in op.available_backends() if name != "torch" and args.backend in (None, name)]
+        for backend in backends:
+            registered = next(candidate for candidate in op._backends if candidate.name == backend)
+            rounds = 0
+            while rounds < args.rounds:
+                records = store.merged(op.name)
+                todo = plan(
+                    op, records, backend, effort=args.effort, device=args.device, grad=not registered.forward_only
+                )
+                if args.shard:
+                    index, count = args.shard
+                    todo = todo[index::count]
+                if not todo:
+                    break
+                print(f"{op.name}:{backend} round {rounds}: {len(todo)} probes ({args.effort})")
+                written = []
+                poisoned = False
+                for index, case in enumerate(todo):
+                    try:
+                        record = op.bench.run_case(backend, case, args.device, args.reps, benchmark=args.bench)
+                    except Exception as error:
+                        record = op.bench.incomplete(backend, case, args.device, f"{type(error).__name__}: {error}")
+                    written.append(record)
+                    try:
+                        torch.zeros(1, device=args.device).item()
+                    except Exception as error:
+                        reason = f"device poisoned: {type(error).__name__}: {error}"
+                        record.result.status, record.result.reason = "crash", reason
+                        print(reason)
+                        written.extend(op.bench.incomplete(backend, rest, args.device, reason) for rest in todo[index + 1 :])
+                        poisoned = True
+                        break
+                store.write_user(written)
+                op.tuner.forget()
+                total += len(written)
+                rounds += 1
+                if poisoned:
+                    break
+    print(f"mapped {total} rows -> {store.user}")
+
+
 def cmd_submit(args: argparse.Namespace) -> None:
     total = len(_work(args.ops, limit=args.limit))
     if not total:
@@ -225,6 +273,17 @@ def main() -> None:
     submit.add_argument("--time", default="2:00:00")
     submit.add_argument("--dry-run", action="store_true")
     submit.set_defaults(fn=cmd_submit)
+
+    mapping = sub.add_parser("map", help="adaptively probe validity regions to fixpoint")
+    mapping.add_argument("ops", nargs="*", help="ops to map (default: all registered)")
+    mapping.add_argument("--backend", help="restrict to one backend")
+    mapping.add_argument("--device", default="cuda")
+    mapping.add_argument("--effort", choices=sorted(EFFORT), default="standard")
+    mapping.add_argument("--reps", type=_positive, default=5, help="timing reps per raced probe")
+    mapping.add_argument("--rounds", type=_positive, default=8, help="max plan/run iterations per backend")
+    mapping.add_argument("--bench", action="store_true", help="also time passing probes")
+    mapping.add_argument("--shard", type=_shard, help="I/K: run the I-th of K deterministic slices of each plan")
+    mapping.set_defaults(fn=cmd_map)
 
     args = parser.parse_args()
     args.fn(args)

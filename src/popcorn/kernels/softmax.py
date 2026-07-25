@@ -1,7 +1,7 @@
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 # quack also ships a softmax, but it is strictly 2-D and its backward
@@ -23,8 +23,6 @@ def softmax_fla(x):
 
 
 # fp16 backward on tiny rows lands just past tolerance.
-@softmax.register(
-    "liger", source="liger_kernel.transformers.functional.liger_softmax", supports={"hidden": Range(16, 1 << 20)}
-)
+@softmax.register("liger", source="liger_kernel.transformers.functional.liger_softmax")
 def softmax_liger(x):
     return kernel(x)

@@ -16,7 +16,7 @@ from popcorn.bench.model import Result
 from popcorn.bench.service import BenchmarkService, validation_mode
 from popcorn.core import annotations
 from popcorn.core.config import call_config
-from popcorn.core.constraints import check, fmt_value
+from popcorn.core.spaces import fmt_value
 from popcorn.core.errors import DispatchError
 from popcorn.core.fingerprint import SCOPES, fingerprint
 from popcorn.core.library import bind_torch_op
@@ -57,12 +57,12 @@ class Backend:
     resolved lazily and served as `kernel` while the adapter runs), an
     `adapter` bridging the reference signature to it, or both.
 
-    A backend owns its eligibility -- `supports` constrains shapes
-    values, `gates` are the narrowed annotations collected from its adapter,
-    `predicate` is an arbitrary veto, and `forward_only=True` marks an
-    implementation that must decline calls needing autograd -- and its
-    lifecycle: conformance is validated when an adapter attaches, availability
-    when first invoked.
+    A backend owns its eligibility -- `gates` are the narrowed annotations
+    collected from its adapter, `predicate` is an arbitrary veto, and
+    `forward_only=True` marks an implementation that must decline calls
+    needing autograd -- and its lifecycle: conformance is validated when an
+    adapter attaches, availability when first invoked. Shape validity comes
+    from recorded rows and fitted regions, not declarations.
 
     Calling a backend forces it for that call; entering it scopes every call
     in the block: `with rms_norm["fla"] as rms_norm: ...`.
@@ -74,7 +74,6 @@ class Backend:
         name: str,
         adapter: Callable[..., Any] | None = None,
         source: str | None = None,
-        supports: Mapping[str, Any] | None = None,
         predicate: Callable[..., bool] | None = None,
         forward_only: bool = False,
     ) -> None:
@@ -84,13 +83,11 @@ class Backend:
         self.name = name
         self.adapter = adapter
         self.source = source
-        self.supports: dict[str, Any] = dict(supports or {})
         self.predicate = predicate
         self.forward_only = forward_only
         self.gates: dict[str, Any] = {}
         self.source_fn: Callable[..., Any] | None = None
         self._prepared = False
-        op._validate_keys(self.supports, "supports", op._dims)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self.op(*args, backend=self.name, **kwargs)
@@ -114,7 +111,6 @@ class Backend:
 
     def notes(self) -> list[str]:
         parts = ["fwd-only"] if self.forward_only else []
-        parts += [f"supports={self.supports}"] if self.supports else []
         return parts + ([f"gates={self.gates}"] if self.gates else [])
 
     @cached_property
@@ -135,8 +131,6 @@ class Backend:
             return reason
         if self.forward_only and self.op._needs_grad(arguments):
             return "no backward implementation"
-        if (rejection := check(self.supports, values)) is not None:
-            return rejection
         for name, annotation in self.gates.items():
             if not matches(arguments[name], annotation):
                 return f"{name}={fmt_value(arguments[name])} does not satisfy {annotation}"
@@ -220,7 +214,6 @@ class Dispatcher:
     def __init__(
         self,
         reference: Callable[..., Any],
-        test_shapes: Mapping[str, Any] | None = None,
         test_args: Mapping[str, Any] | None = None,
         test_inputs: Mapping[str, Callable[..., Any]] | None = None,
         name: str | None = None,
@@ -237,7 +230,7 @@ class Dispatcher:
         self._params = tuple(self._signature.parameters)
         controls = [
             inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=None, annotation=annotation)
-            for name, annotation in (("backend", str), ("bench", bool), ("validate", bool))
+            for name, annotation in (("backend", str), ("bench", bool), ("validate", bool), ("unsafe", bool))
         ]
         self.__signature__ = self._signature.replace(parameters=[*self._signature.parameters.values(), *controls])
 
@@ -245,9 +238,7 @@ class Dispatcher:
         self.specs = annotations.plans(self._signature)
         self._dims = annotations.dim_names(self.specs)
 
-        # test grid metadata
-        self.test_shapes: dict[str, Any] = dict(test_shapes or {})
-        self._validate_keys(self.test_shapes, "test_shapes", self._dims)
+        # test grid metadata — dim pools live in `core/dims.DIMS`, not per-op
         self.arg_pools = self._arg_pools(dict(test_args or {}))
         self.test_inputs: dict[str, Callable[..., Any]] = dict(test_inputs or {})  # tensor param -> input transform
         self._validate_keys(self.test_inputs, "test_inputs", {spec.param for spec in self.specs})
@@ -299,6 +290,7 @@ class Dispatcher:
         backend: str | None = None,
         bench: bool | None = None,
         validate: bool | None = None,
+        unsafe: bool | None = None,
         **kwargs: Any,
     ) -> Any:
         arguments = self._bind(*args, **kwargs)
@@ -306,19 +298,14 @@ class Dispatcher:
         forced = backend or self._scoped.get()
         candidates = self._eligible(values, arguments, forced)
         call = call_config(self, values, arguments)
-        if mode := validation_mode(bench, validate):
+        if validation_mode(bench, validate) == "bench":
             if call is None:
                 raise DispatchError(f"{self.name}: this call cannot be represented as a validation case")
             names = [candidate.name for candidate in candidates if candidate.name != "torch"]
-            if self.bench.ensure(call, arguments, names, benchmark=mode == "bench"):
+            if self.bench.ensure(call, arguments, names, benchmark=True):
                 self.tuner.forget()
-        selected = self.tuner.select(
-            call,
-            candidates,
-            forced,
-            self._cache_signature(arguments),
-            require_pass=bool(mode),
-        )
+        policy = self.tuner.policy.bind(unsafe)
+        selected = self.tuner.select(call, candidates, forced, self._cache_signature(arguments), policy)
         return selected.invoke(arguments)
 
     def validate(self, *args: Any, backend: str | None = None, **kwargs: Any) -> list[Result]:
@@ -338,13 +325,12 @@ class Dispatcher:
         self,
         name: str,
         source: str | None = None,
-        supports: Mapping[str, Any] | None = None,
         predicate: Callable[..., bool] | None = None,
         forward_only: bool = False,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         if any(b.name == name for b in self._backends):
             raise ValueError(f"{self.name}: backend {name!r} already registered")
-        backend = Backend(self, name, source=source, supports=supports, predicate=predicate, forward_only=forward_only)
+        backend = Backend(self, name, source=source, predicate=predicate, forward_only=forward_only)
         self._backends.insert(-1, backend)  # registration order, torch reference last
         self.tuner.forget()
 
@@ -467,7 +453,6 @@ def register_kernel(fn: Callable[..., Any]) -> Dispatcher: ...
 @typing.overload
 def register_kernel(
     *,
-    test_shapes: Mapping[str, Any] | None = None,
     test_args: Mapping[str, Any] | None = None,
     test_inputs: Mapping[str, Callable[..., Any]] | None = None,
     name: str | None = None,
@@ -478,7 +463,6 @@ def register_kernel(
 def register_kernel(
     fn: Callable[..., Any] | None = None,
     *,
-    test_shapes: Mapping[str, Any] | None = None,
     test_args: Mapping[str, Any] | None = None,
     test_inputs: Mapping[str, Callable[..., Any]] | None = None,
     name: str | None = None,
@@ -486,7 +470,7 @@ def register_kernel(
 ) -> Dispatcher | Callable[[Callable[..., Any]], Dispatcher]:
     def wrap(reference: Callable[..., Any]) -> Dispatcher:
         dispatcher = Dispatcher(
-            reference, test_shapes=test_shapes, test_args=test_args, test_inputs=test_inputs, name=name, tags=tags
+            reference, test_args=test_args, test_inputs=test_inputs, name=name, tags=tags
         )
         if dispatcher.name in KERNELS:
             raise ValueError(f"kernel {dispatcher.name!r} already registered")

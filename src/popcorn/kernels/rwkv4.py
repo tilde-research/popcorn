@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
@@ -16,7 +16,6 @@ def _state(s):
 # The effective decay is -exp(w); the running numerator, denominator, and
 # their shared log offset travel in `state`, matching fla.
 @register_kernel(
-    test_shapes={"channels": Range(8, 1024)},
     test_inputs={"state": _state},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )

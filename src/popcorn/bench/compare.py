@@ -13,6 +13,11 @@ from popcorn.bench.model import Gauge, Result
 
 FLOORS = {torch.float64: 1e-10, torch.float32: 2e-5, torch.float16: 1e-3, torch.bfloat16: 2e-2}
 
+try:
+    from triton.testing import do_bench as _do_bench
+except ImportError:  # CPU-only / no triton: fall back to the hand-rolled timer
+    _do_bench = None
+
 
 def _clone(inputs: Mapping[str, Any], dtype: torch.dtype | None = None, grad: bool = True) -> dict[str, Any]:
     def clone(value: Any) -> Any:
@@ -87,15 +92,39 @@ def _timed(fn: Callable[[], Any], device: torch.device | None) -> tuple[float, f
     return (time.perf_counter() - started) * 1e3, None
 
 
-def _measure(fn: Callable[[], Any], device: torch.device | None, repeats: int, warmup: int) -> tuple[float, float | None]:
-    times, memory = [], []
+def _measure(fn: Callable[[], Any], device: torch.device | None, repeats: int, warmup: int) -> dict[str, float]:
+    """Time `fn`; on CUDA prefer Triton's do_bench (L2 clear, quantiles)."""
+    memory: list[float] = []
+    if device is not None and _do_bench is not None:
+        try:
+            with torch.cuda.device(device):
+                base = torch.cuda.memory_allocated(device)
+                torch.cuda.reset_peak_memory_stats(device)
+                quantiles = _do_bench(
+                    fn,
+                    warmup=max(5, warmup * 5),
+                    rep=max(10, repeats * 10),
+                    quantiles=[0.2, 0.5, 0.8],
+                )
+                peak = (torch.cuda.max_memory_allocated(device) - base) / 2**20
+            q20, mid, q80 = (quantiles if isinstance(quantiles, list) else [quantiles, quantiles, quantiles])
+            result = {"ms": round(float(mid), 6), "q20_ms": round(float(q20), 6), "q80_ms": round(float(q80), 6)}
+            if peak is not None:
+                result["mem_mb"] = round(peak, 3)
+            return result
+        except Exception:
+            pass
+    times = []
     for index in range(warmup + repeats):
         elapsed, peak = _timed(fn, device)
         if index >= warmup:
             times.append(elapsed)
             if peak is not None:
                 memory.append(peak)
-    return round(median(times), 6), round(max(memory), 3) if memory else None
+    result = {"ms": round(median(times), 6)}
+    if memory:
+        result["mem_mb"] = round(max(memory), 3)
+    return result
 
 
 def _benchmark(
@@ -108,10 +137,15 @@ def _benchmark(
 ) -> dict[str, float]:
     tensor = next((value for value in inputs.values() if isinstance(value, torch.Tensor)), None)
     device = tensor.device if tensor is not None and tensor.device.type == "cuda" else None
-    bench = {}
+    bench: dict[str, float] = {}
     for prefix, forward in (("", mine), ("ref_", reference)):
         side = _clone(inputs, grad=backward)
-        bench[f"{prefix}fwd_ms"], bench[f"{prefix}fwd_mem_mb"] = _measure(lambda: forward(**side), device, repeats, warmup)
+        measured = _measure(lambda: forward(**side), device, repeats, warmup)
+        bench[f"{prefix}fwd_ms"] = measured["ms"]
+        if "q20_ms" in measured:
+            bench[f"{prefix}fwd_q20_ms"], bench[f"{prefix}fwd_q80_ms"] = measured["q20_ms"], measured["q80_ms"]
+        if "mem_mb" in measured:
+            bench[f"{prefix}fwd_mem_mb"] = measured["mem_mb"]
         if not backward:
             continue
         outputs = _outputs(forward(**side))
@@ -119,10 +153,13 @@ def _benchmark(
             continue
         picked = [outputs[index] for index in graded]
         cotangents = _cotangents(picked, 0)
-        bench[f"{prefix}bwd_ms"], bench[f"{prefix}bwd_mem_mb"] = _measure(
-            lambda: _grads(picked, side, cotangents, retain=True), device, repeats, warmup
-        )
-    return {name: value for name, value in bench.items() if value is not None}
+        measured = _measure(lambda: _grads(picked, side, cotangents, retain=True), device, repeats, warmup)
+        bench[f"{prefix}bwd_ms"] = measured["ms"]
+        if "q20_ms" in measured:
+            bench[f"{prefix}bwd_q20_ms"], bench[f"{prefix}bwd_q80_ms"] = measured["q20_ms"], measured["q80_ms"]
+        if "mem_mb" in measured:
+            bench[f"{prefix}bwd_mem_mb"] = measured["mem_mb"]
+    return bench
 
 
 def _halt(result: Result, status: str, reason: str) -> Result:
@@ -158,10 +195,14 @@ def compare_inputs(
         try:
             truth_outputs = _outputs(reference(**truth_inputs))
             budget_outputs = _outputs(reference(**budget_inputs))
+        except torch.OutOfMemoryError as error:
+            return _halt(result, "oom", f"reference: {error}")
         except Exception as error:
             return _halt(result, "error", f"reference: {type(error).__name__}: {error}")
         try:
             mine_outputs = _outputs(mine(**mine_inputs))
+        except torch.OutOfMemoryError as error:
+            return _halt(result, "oom", str(error))
         except Exception as error:
             return _halt(result, "crash", f"{type(error).__name__}: {error}")
 

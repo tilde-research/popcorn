@@ -24,20 +24,45 @@ from popcorn import (
     BackendVersionError,
     DispatchError,
     Dispatcher,
-    Div,
-    Pow2,
     Range,
-    UnvalidatedWarning,
     declare_backend,
     kernel,
 )
-from popcorn.core.constraints import check, satisfies
 from popcorn.core.config import call_config, config_id, device_name
 from popcorn.core.fingerprint import fingerprint
 from popcorn.core.typecheck import matches, narrows
 
-pytestmark = pytest.mark.filterwarnings("ignore::popcorn.core.errors.UnvalidatedWarning")
 comparison = importlib.import_module("popcorn.bench.compare")
+
+
+def _exact_pass_row(op, x, backend="alt", *, status="pass", reason="", bench=None, **kwargs):
+    from popcorn.core.sources import installed_version
+
+    bound = op._signature.bind(x, **kwargs)
+    bound.apply_defaults()
+    arguments = bound.arguments
+    call = call_config(op, op._values(arguments), arguments)
+    return {
+        "schema": 2,
+        "op": op.name,
+        "backend": backend,
+        "device": call.device_name,
+        "case": "exact",
+        "case_id": f"{backend}-{config_id(call.config)}",
+        "status": status,
+        "reason": reason,
+        "grad": call.grad,
+        "torch": torch.__version__,
+        "backend_version": installed_version(backend),
+        "ts": "2026-01-01T00:00:00+00:00",
+        "config": call.config,
+        "fwd": {},
+        "bwd": {},
+        "bench": bench or {},
+        "benchmarked": bench is not None,
+        "bench_error": "",
+        "reps": 1,
+    }
 
 
 def make_op(**dispatcher_kwargs):
@@ -49,25 +74,6 @@ def make_op(**dispatcher_kwargs):
         return x + 1
 
     return Dispatcher(op, **dispatcher_kwargs)
-
-
-class TestConstraints:
-    def test_specs(self):
-        assert satisfies(Range(2, 4), 3) and not satisfies(Range(2, 4), 5)
-        assert satisfies(Div(8), 16) and not satisfies(Div(8), 12)
-        assert satisfies(Pow2(), 64) and not satisfies(Pow2(), 48)
-        assert satisfies({16, 32}, 16) and not satisfies({16, 32}, 8)
-        assert satisfies(None, None) and not satisfies(None, torch.ones(1))
-        assert satisfies((Range(2, 64), Div(4)), 8) and not satisfies((Range(2, 64), Div(4)), 6)
-        assert satisfies(lambda v: v > 0, 1)
-
-    def test_tensor_never_equals_literal(self):
-        assert not satisfies(5, torch.tensor(5))
-
-    def test_check_reports_first_failure(self):
-        message = check({"D": Range(2, 4)}, {"D": 8})
-        assert message == "D=8 is not in [2, 4]"
-        assert check({"D": Range(2, 4)}, {"other": 1}) is None
 
 
 class TestTypecheck:
@@ -143,27 +149,69 @@ class TestDispatch:
         assert op.available_backends() == ("torch",)
         assert torch.equal(op(torch.zeros(3, 4)), torch.ones(3, 4))
 
-    def test_supports_gates_resolution(self):
+    def test_region_gates_resolution(self, tmp_path, monkeypatch):
+        from popcorn.bench import store
+
+        monkeypatch.setattr(store, "BUNDLED_REPORTS", tmp_path)
+        monkeypatch.setenv("POPCORN_CACHE_DIR", str(tmp_path / "cache"))
         op = make_op()
+        op.register("fast")(lambda x, weight, flag: x - 1)
+        # Passes only on powers of two: fitted region excludes D=5.
+        write(
+            [
+                Record.from_dict(
+                    {
+                        "schema": 2,
+                        "op": "op",
+                        "backend": "fast",
+                        "device": device_name("cpu"),
+                        "case": "",
+                        "case_id": f"d{n}",
+                        "status": "pass" if n & (n - 1) == 0 else "fail",
+                        "reason": "",
+                        "grad": False,
+                        "torch": torch.__version__,
+                        "backend_version": None,
+                        "ts": "2026-01-01T00:00:00+00:00",
+                        "config": {
+                            "dims": {"D": n},
+                            "batch": [],
+                            "dtype": "float32",
+                            "args": {"flag": False},
+                            "present": [],
+                        },
+                        "fwd": {},
+                        "bwd": {},
+                        "bench": {},
+                        "benchmarked": False,
+                        "bench_error": "",
+                        "reps": 1,
+                    }
+                )
+                for n in (2, 3, 4, 5, 8)
+            ],
+            tmp_path,
+        )
+        assert torch.equal(op(torch.zeros(4)), -torch.ones(4))
+        assert torch.equal(op(torch.zeros(5)), torch.ones(5))
 
-        @op.register("fast", supports={"D": Pow2()})
-        def fast(x, weight, flag):
-            return x - 1
+    def test_annotation_gates_resolution(self, tmp_path, monkeypatch):
+        from popcorn.bench import store
 
-        assert torch.equal(op(torch.zeros(3, 4)), -torch.ones(3, 4))
-        assert torch.equal(op(torch.zeros(3, 5)), torch.ones(3, 5))  # D=5 -> torch
-
-    def test_annotation_gates_resolution(self):
+        monkeypatch.setattr(store, "BUNDLED_REPORTS", tmp_path)
+        monkeypatch.setenv("POPCORN_CACHE_DIR", str(tmp_path / "cache"))
         op = make_op()
 
         @op.register("fast")
         def fast(x, weight, flag: Literal[False]):
             return x - 1
 
-        assert torch.equal(op(torch.zeros(2)), -torch.ones(2))
-        assert torch.equal(op(torch.zeros(2), flag=True), torch.ones(2))
+        x = torch.zeros(2, 4)
+        write([Record.from_dict(_exact_pass_row(op, x, "fast"))], tmp_path)
+        assert torch.equal(op(x), -torch.ones_like(x))
+        assert torch.equal(op(torch.zeros(2, 4), flag=True), torch.ones(2, 4))
         with pytest.raises(DispatchError, match="does not satisfy"):
-            op(torch.zeros(2), flag=True, backend="fast")
+            op(torch.zeros(2, 4), flag=True, backend="fast")
 
     def test_registration_order(self):
         op = make_op()
@@ -172,11 +220,49 @@ class TestDispatch:
         assert op.available_backends() == ("first", "second", "torch")
         assert torch.equal(op(torch.zeros(2)), torch.full((2,), 10.0))
 
-    def test_explicit_backend_violation_raises(self):
+    def test_explicit_backend_outside_region_raises(self, tmp_path, monkeypatch):
+        from popcorn.bench import store
+
+        monkeypatch.setattr(store, "BUNDLED_REPORTS", tmp_path)
+        monkeypatch.setenv("POPCORN_CACHE_DIR", str(tmp_path / "cache"))
         op = make_op()
-        op.register("fast", supports={"D": Pow2()})(lambda x, weight, flag: x)
-        with pytest.raises(DispatchError, match="a power of two"):
-            op(torch.zeros(3, 5), backend="fast")
+        op.register("fast")(lambda x, weight, flag: x)
+        write(
+            [
+                Record.from_dict(
+                    {
+                        "schema": 2,
+                        "op": "op",
+                        "backend": "fast",
+                        "device": device_name("cpu"),
+                        "case": "",
+                        "case_id": "d4",
+                        "status": "pass",
+                        "reason": "",
+                        "grad": False,
+                        "torch": torch.__version__,
+                        "backend_version": None,
+                        "ts": "2026-01-01T00:00:00+00:00",
+                        "config": {
+                            "dims": {"D": 4},
+                            "batch": [],
+                            "dtype": "float32",
+                            "args": {"flag": False},
+                            "present": [],
+                        },
+                        "fwd": {},
+                        "bwd": {},
+                        "bench": {},
+                        "benchmarked": False,
+                        "bench_error": "",
+                        "reps": 1,
+                    }
+                )
+            ],
+            tmp_path,
+        )
+        with pytest.raises(DispatchError, match="outside its validity region"):
+            op(torch.zeros(5), backend="fast")
         with pytest.raises(DispatchError, match="unknown backend"):
             op(torch.zeros(3), backend="nope")
 
@@ -310,7 +396,8 @@ class TestRegistration:
                 assert hasattr(returned, "dim_str"), f"{op.name}: tensor returns use jaxtyping shapes"
             controls = list(op.__signature__.parameters.values())[len(op._signature.parameters) :]
             assert [(control.name, control.kind, control.default) for control in controls] == [
-                (name, inspect.Parameter.KEYWORD_ONLY, None) for name in ("backend", "bench", "validate")
+                (name, inspect.Parameter.KEYWORD_ONLY, None)
+                for name in ("backend", "bench", "validate", "unsafe")
             ], f"{op.name}: __signature__ must expose the reference params plus the dispatch controls"
 
     def test_kernel_doc_format(self):
@@ -371,19 +458,6 @@ class TestRegistration:
             op.register("alt")
         with pytest.raises(ValueError, match="invalid backend name"):
             op.register("Bad Name")
-
-    def test_constraint_keys_are_shapes_only(self):
-        op = make_op()
-        with pytest.raises(TypeError, match="unknown supports keys"):
-            op.register("alt", supports={"flag": False})
-        with pytest.raises(TypeError, match="unknown supports keys"):
-            op.register("alt", supports={"dtype": {torch.float16}})
-        with pytest.raises(TypeError, match="unknown supports keys"):
-            op.register("alt", supports={"x.dtype": {torch.float16}})
-        with pytest.raises(TypeError, match="unknown test_shapes keys"):
-            make_op(test_shapes={"flag": {True}})
-        with pytest.raises(TypeError, match="unknown test_shapes keys"):
-            make_op(test_shapes={"nope": Range(1, 2)})
 
     def test_test_args_validated(self):
         with pytest.raises(TypeError, match="not scalar arguments"):
@@ -474,12 +548,6 @@ class TestEnvelope:
         op = make_op()
         assert op.arg_pools == {"flag": [False, True]}
 
-    def test_test_shapes_are_grid_metadata_only(self):
-        op = make_op(test_shapes={"D": Range(2, 8)})
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            op(torch.zeros(3, 16))
-
     def test_test_args_are_grid_metadata_only(self):
         def op(x, mode: str = "a"):
             return x
@@ -497,11 +565,11 @@ class TestEnvelope:
 
         d = Dispatcher(
             op,
-            test_shapes={"rows": {4}, "boundaries": {3}},
             test_inputs={"offsets": lambda _, dims, generator: torch.tensor([0, 1, dims["rows"]], dtype=torch.int32)},
         )
-        inputs = make_inputs(d, cases(d)[0], device="cpu")
-        assert inputs["offsets"].tolist() == [0, 1, 4]
+        case = cases(d, limit=1)[0]
+        inputs = make_inputs(d, case, device="cpu")
+        assert inputs["offsets"].tolist() == [0, 1, dict(case.dims)["rows"]]
 
     def test_test_inputs_must_be_callable(self):
         with pytest.raises(TypeError, match="must be callable"):
@@ -509,14 +577,30 @@ class TestEnvelope:
         with pytest.raises(TypeError, match="one or three positional arguments"):
             make_op(test_inputs={"x": lambda tensor, dims: tensor})
 
-    def test_grid_is_full_product(self):
+    def test_grid_samples_without_materializing(self, monkeypatch):
+        from popcorn.bench import grid as grid_mod
         from popcorn.bench.grid import cases
+        from popcorn.core import dims as dims_mod
 
-        op = make_op(test_shapes={"D": {2, 4}})
-        grid = cases(op)
-        assert len(grid) == 2 * 2 * 2 * 3 * 3  # D x flag x bias presence x dtypes x batches
-        assert len({c.case_id for c in grid}) == len(grid)
-        assert cases(op, limit=10)
+        monkeypatch.setitem(dims_mod.DIMS, "D", {2, 4})
+        op = make_op()
+        full = cases(op)
+        assert len(full) == 2 * 2 * 2 * 3 * 3  # D x flag x bias presence x dtypes x batches
+        assert len({c.case_id for c in full}) == len(full)
+        limited = cases(op, limit=10)
+        assert len(limited) == 10
+        # Wide pools must not build the cartesian list when sampling.
+        monkeypatch.setitem(dims_mod.DIMS, "D", set(range(1, 10_000)))
+        calls = {"n": 0}
+        real_sample = grid_mod.random.Random.sample
+
+        def counted(self, population, k):
+            calls["n"] += 1
+            return real_sample(self, population, k)
+
+        monkeypatch.setattr(grid_mod.random.Random, "sample", counted)
+        assert len(cases(op, limit=7)) == 7
+        assert calls["n"] == 1
 
 
 class TestTuning:
@@ -549,7 +633,7 @@ class TestTuning:
                 "torch": torch.__version__,
                 "backend_version": None,
                 "ts": "2026-01-01T00:00:00+00:00",
-                "config": {"dims": dims, "batch": [], "dtype": "float32", "args": {"flag": False}, "present": []},
+                "config": {"dims": dims, "batch": [1], "dtype": "float32", "args": {"flag": False}, "present": []},
                 "bench": {"fwd_ms": ms, "ref_fwd_ms": ref_ms},
                 "benchmarked": True,
                 "bench_error": "",
@@ -604,6 +688,34 @@ class TestTuning:
         op(torch.zeros(3, 16))
         assert len(op.tuner._selected) == 2  # cached, decided once
 
+    def test_neutral_continuous_args_share_timing_neighbors(self):
+        def reference(x: Float[Tensor, "... D"], eps: float = 1e-6):
+            return x + 1
+
+        op = Dispatcher(reference)
+        op.register("alt")(lambda x, eps: x - 1)
+        x = torch.zeros(2, 8)
+        timed = self._row(op, x, eps=1e-6, bench={"fwd_ms": 0.1, "ref_fwd_ms": 1.0})
+        proven = self._row(op, x, eps=1e-4)  # widen the Real band; no own timing
+        self._store(self.reports, timed, proven)
+        # eps is NEUTRAL: the 1e-6 timing row should win inside the fitted band.
+        assert torch.equal(op(torch.zeros(2, 8), eps=5e-5), -torch.ones(2, 8))
+
+    def test_speed_discrete_args_do_not_share_across_values(self):
+        def reference(x: Float[Tensor, "... D"], causal: bool = False):
+            return x + 1
+
+        op = Dispatcher(reference)
+        op.register("alt")(lambda x, causal: x - 1)
+        x = torch.zeros(2, 8)
+        # Timed winner only for causal=False; causal=True stays unmapped → registration order
+        # would pick alt, so prove a torch-favoring point... instead: map both, time only False.
+        timed = self._row(op, x, causal=False, bench={"fwd_ms": 0.1, "ref_fwd_ms": 1.0})
+        other = self._row(op, x, causal=True, bench={"fwd_ms": 3.0, "ref_fwd_ms": 1.0})
+        self._store(self.reports, timed, other)
+        assert torch.equal(op(torch.zeros(2, 8), causal=False), -torch.ones(2, 8))
+        assert torch.equal(op(torch.zeros(2, 8), causal=True), torch.ones(2, 8))
+
     def test_compares_each_backend_without_cross_backend_infinities(self):
         op = make_op()
         op.register("fast")(lambda x, weight, flag: x - 1)
@@ -650,7 +762,7 @@ class TestTuning:
         (self.reports / "op.jsonl").write_text("\n".join(json.dumps(r) for r in (row((), 0.1, 1.0), row((2, 3), 3.0, 1.0))))
         assert torch.equal(op(torch.zeros(2, 3, 4)), torch.ones(2, 3, 4))
 
-    def test_falls_back_to_registration_order_without_data(self):
+    def test_falls_back_to_registration_order_when_unmapped(self):
         op = make_op()
         op.register("alt")(lambda x, weight, flag: x - 1)
         assert torch.equal(op(torch.zeros(2, 4)), -torch.ones(2, 4))
@@ -667,7 +779,7 @@ class TestTuning:
         slow["impl_hash"] = "dead"
         self._store(self.reports, slow)
         op.tuner.forget()
-        assert torch.equal(op(x), -torch.ones_like(x))  # stale row ignored: registration order wins
+        assert torch.equal(op(x), -torch.ones_like(x))  # stale → unmapped again → registration order
 
     def test_stale_fingerprint_failures_stop_blocking(self):
         op = make_op()
@@ -684,15 +796,34 @@ class TestTuning:
         op.tuner.forget()
         assert torch.equal(op(x, backend="alt"), -torch.ones_like(x))  # reference changed: failure no longer applies
 
-    def test_unknown_warns_once_per_exact_call(self):
+    def test_mapped_backend_blocks_outside_region(self):
         op = make_op()
         op.register("alt")(lambda x, weight, flag: x - 1)
-        with warnings.catch_warnings(record=True) as seen:
-            warnings.simplefilter("always", UnvalidatedWarning)
-            op(torch.zeros(2, 4))
-            op(torch.zeros(2, 4))
-            op(torch.zeros(3, 4))
-        assert len([warning for warning in seen if warning.category is UnvalidatedWarning]) == 2
+        self._record(("alt", {"D": 8}, 0.1, 1.0), ("alt", {"D": 16}, 0.1, 1.0))
+        assert torch.equal(op(torch.zeros(2, 8)), -torch.ones(2, 8))
+        assert torch.equal(op(torch.zeros(2, 4)), torch.ones(2, 4))  # outside fitted region
+
+    def test_unsafe_extrapolates_among_proven_backends_by_nearest(self):
+        """a,b proven to N; c only to N/2. At 2N + unsafe → fastest of {a,b}, not c."""
+        op = make_op()
+        op.register("a")(lambda x, weight, flag: x - 1)
+        op.register("b")(lambda x, weight, flag: x - 2)
+        op.register("c")(lambda x, weight, flag: x - 3)
+        self._record(
+            ("a", {"D": 8}, 0.5, 1.0),
+            ("a", {"D": 16}, 0.5, 1.0),
+            ("b", {"D": 8}, 0.2, 1.0),
+            ("b", {"D": 16}, 0.2, 1.0),
+            ("c", {"D": 8}, 0.05, 1.0),  # fastest locally, but envelope only to 8
+        )
+        # Safe: 32 is outside every envelope → torch.
+        assert torch.equal(op(torch.zeros(2, 32)), torch.ones(2, 32))
+        # Unsafe: nearest proven rung is D=16 → a vs b; b is faster → x-2.
+        assert torch.equal(op(torch.zeros(2, 32), unsafe=True), torch.zeros(2, 32) - 2)
+        # Force still errors outside the region unless unsafe.
+        with pytest.raises(DispatchError, match="outside its validity region"):
+            op(torch.zeros(2, 32), backend="a")
+        assert torch.equal(op(torch.zeros(2, 32), backend="a", unsafe=True), torch.zeros(2, 32) - 1)
 
     def test_exact_failure_matches_every_call_dimension(self):
         op = make_op()
@@ -784,9 +915,7 @@ class TestTuning:
             with pytest.raises(DispatchError, match="bundled"):
                 op(x, backend="alt")
         else:
-            with warnings.catch_warnings():
-                warnings.simplefilter("error", UnvalidatedWarning)
-                assert torch.equal(op(x, backend="alt"), -torch.ones_like(x))
+            assert torch.equal(op(x, backend="alt"), -torch.ones_like(x))
 
     def test_newer_harness_error_cannot_erase_known_failure(self):
         op = make_op()
@@ -799,15 +928,15 @@ class TestTuning:
         with pytest.raises(DispatchError, match="known failure"):
             op(x, backend="alt")
 
-    def test_validate_mode_reruns_stale_fingerprint_rows(self, monkeypatch):
+    def test_bench_mode_reruns_stale_fingerprint_rows(self, monkeypatch):
         op = make_op()
         op.register("alt")(lambda x, weight, flag: x - 1)
         x = torch.zeros(2, 4)
         stale = self._row(op, x, status="pass", bench={"fwd_ms": 0.1, "ref_fwd_ms": 1.0})
         stale["impl_hash"] = "dead"
         self._store(self.reports, stale)
-        monkeypatch.setenv("POPCORN_VALIDATE", "1")
-        assert torch.equal(op(x), torch.ones_like(x))  # re-validated: alt now fails, torch serves the call
+        monkeypatch.setenv("POPCORN_BENCH", "1")
+        assert torch.equal(op(x), torch.ones_like(x))  # re-measured: alt fails, torch serves
         rows = [json.loads(line) for line in (self.cache / "op.jsonl").read_text().splitlines()]
         assert [row["impl_hash"] for row in rows] == [op["alt"].fingerprint]
         assert [row["status"] for row in rows] == ["fail"]
@@ -840,24 +969,19 @@ class TestTuning:
         assert result.status == "pass" and result.benchmarked
         assert result.bench["fwd_ms"] > 0 and result.bench["ref_fwd_ms"] > 0
 
-    def test_validate_mode_routes_around_new_failure(self, monkeypatch):
+    def test_bench_mode_routes_around_new_failure(self, monkeypatch):
         op = make_op()
         op.register("alt")(lambda x, weight, flag: x - 1)
-        monkeypatch.setenv("POPCORN_VALIDATE", "1")
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", UnvalidatedWarning)
-            assert torch.equal(op(torch.zeros(2, 4)), torch.ones(2, 4))
+        monkeypatch.setenv("POPCORN_BENCH", "1")
+        assert torch.equal(op(torch.zeros(2, 4)), torch.ones(2, 4))
         rows = [json.loads(line) for line in (self.cache / "op.jsonl").read_text().splitlines()]
-        assert rows[0]["status"] == "fail" and not rows[0]["benchmarked"]
+        assert rows[0]["status"] == "fail"
 
     def test_bench_mode_records_timings(self, monkeypatch):
         op = make_op()
         op.register("alt")(lambda x, weight, flag: x + 1)
-        monkeypatch.setenv("POPCORN_VALIDATE", "1")
         monkeypatch.setenv("POPCORN_BENCH", "1")
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", UnvalidatedWarning)
-            assert torch.equal(op(torch.zeros(2, 4)), torch.ones(2, 4))
+        assert torch.equal(op(torch.zeros(2, 4)), torch.ones(2, 4))
         rows = [json.loads(line) for line in (self.cache / "op.jsonl").read_text().splitlines()]
         assert rows[0]["status"] == "pass" and rows[0]["benchmarked"]
         assert rows[0]["bench"]["fwd_ms"] > 0 and rows[0]["bench"]["ref_fwd_ms"] > 0
@@ -877,10 +1001,8 @@ class TestTuning:
 
         monkeypatch.setattr(comparison, "_benchmark", fail)
         monkeypatch.setenv("POPCORN_BENCH", "1")
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", UnvalidatedWarning)
-            assert torch.equal(op(torch.zeros(2, 4), backend="alt"), torch.ones(2, 4))
-            assert torch.equal(op(torch.zeros(2, 4)), torch.ones(2, 4))
+        assert torch.equal(op(torch.zeros(2, 4), backend="alt"), torch.ones(2, 4))
+        assert torch.equal(op(torch.zeros(2, 4)), torch.ones(2, 4))
         assert calls == 22
         [row] = [json.loads(line) for line in (self.cache / "op.jsonl").read_text().splitlines()]
         assert row["status"] == "pass" and row["bench_error"] == "RuntimeError: timer failed"
@@ -905,7 +1027,7 @@ class TestTuning:
         assert op.tuner.best(device=self.device, grad=False, D={1024}).name == "torch"
         assert op.tuner.best(device=self.device, grad=False, D=Range(2, 32), flag=False).name == "alt"
         with op.tuner.best(device=self.device, grad=False, D=Range(2, 32)):
-            assert torch.equal(op(torch.zeros(2, 4)), -torch.ones(2, 4))  # scoped to alt
+            assert torch.equal(op(torch.zeros(2, 8)), -torch.ones(2, 8))  # scoped to alt
         with pytest.raises(TypeError, match="unknown filter keys"):
             op.tuner.best(nope=Range(1, 2))
         with pytest.raises(LookupError):

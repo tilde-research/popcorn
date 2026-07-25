@@ -2,7 +2,7 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
 def _rotate_half(x):
@@ -17,7 +17,6 @@ def _table(f):
 # The frequency tables may have one batch or match `q`, and duplicate their
 # first half.
 @register_kernel(
-    test_shapes={"seq": Range(2, 512), "head_dim": {32}},
     test_inputs={"cos": _table(torch.cos), "sin": _table(torch.sin)},
     tags={Tag.POSITIONAL},
 )
