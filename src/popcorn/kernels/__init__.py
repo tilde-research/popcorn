@@ -1,7 +1,5 @@
 """Kernel registry: importing this package registers every op and backend."""
 
-# ruff: noqa: E402
-
 from popcorn.core.sources import declare_backend
 
 declare_backend("fa3", package="flash-attn-3", min_version="3.0.0", max_version="3.0.0", extra="fa3")
@@ -15,25 +13,32 @@ from popcorn.kernels.abc import abc
 from popcorn.kernels.add_rms_norm import add_rms_norm
 from popcorn.kernels.addmm import addmm
 from popcorn.kernels.attn import attn
+from popcorn.kernels.attn_decode import attn_decode
 from popcorn.kernels.attn_varlen import attn_varlen
 from popcorn.kernels.based import based
 from popcorn.kernels.bias_gelu import bias_gelu
 from popcorn.kernels.bit_linear import bit_linear
+from popcorn.kernels.causal_conv1d_update import causal_conv1d_update
 from popcorn.kernels.chunk_global_cumsum import chunk_global_cumsum
 from popcorn.kernels.chunk_local_cumsum import chunk_local_cumsum
 from popcorn.kernels.comba import comba
+from popcorn.kernels.comba_decode import comba_decode
 from popcorn.kernels.cross_entropy import cross_entropy
 from popcorn.kernels.delta_rule import delta_rule
+from popcorn.kernels.delta_rule_decode import delta_rule_decode
 from popcorn.kernels.deltaformer import deltaformer
 from popcorn.kernels.dyt import dyt
 from popcorn.kernels.embedding import embedding
 from popcorn.kernels.forgetting_attn import forgetting_attn
 from popcorn.kernels.gated_delta_product import gated_delta_product
 from popcorn.kernels.gated_delta_rule import gated_delta_rule
+from popcorn.kernels.gated_delta_rule_decode import gated_delta_rule_decode
 from popcorn.kernels.gated_oja_rule import gated_oja_rule
+from popcorn.kernels.gated_oja_rule_decode import gated_oja_rule_decode
 from popcorn.kernels.geglu import geglu
 from popcorn.kernels.gelu import gelu
 from popcorn.kernels.gla import gla
+from popcorn.kernels.gla_decode import gla_decode
 from popcorn.kernels.group_norm import group_norm
 from popcorn.kernels.group_norm_linear import group_norm_linear
 from popcorn.kernels.grpo import grpo
@@ -41,10 +46,12 @@ from popcorn.kernels.grpo_offpolicy import grpo_offpolicy
 from popcorn.kernels.gsa import gsa
 from popcorn.kernels.hadamard_transform import hadamard_transform
 from popcorn.kernels.hgrn import hgrn
+from popcorn.kernels.hgrn_decode import hgrn_decode
 from popcorn.kernels.int8_int2_matmul import int8_int2_matmul
 from popcorn.kernels.iplr_delta_rule import iplr_delta_rule
 from popcorn.kernels.jsd import jsd
 from popcorn.kernels.kda import kda
+from popcorn.kernels.kda_decode import kda_decode
 from popcorn.kernels.kda_gate import kda_gate
 from popcorn.kernels.kda_gate_cumsum import kda_gate_cumsum
 from popcorn.kernels.kl_div import kl_div
@@ -56,6 +63,7 @@ from popcorn.kernels.layer_norm_linear_quant import layer_norm_linear_quant
 from popcorn.kernels.layer_norm_swish_linear import layer_norm_swish_linear
 from popcorn.kernels.lightning_attn import lightning_attn
 from popcorn.kernels.linear_attn import linear_attn
+from popcorn.kernels.linear_attn_decode import linear_attn_decode
 from popcorn.kernels.linear_cross_entropy import linear_cross_entropy
 from popcorn.kernels.linear_jsd import linear_jsd
 from popcorn.kernels.linear_kl_div import linear_kl_div
@@ -77,6 +85,7 @@ from popcorn.kernels.poly_norm import poly_norm
 from popcorn.kernels.qwen2vl_mrope import qwen2vl_mrope
 from popcorn.kernels.rebased import rebased
 from popcorn.kernels.retention import retention
+from popcorn.kernels.retention_decode import retention_decode
 from popcorn.kernels.rms_norm import rms_norm
 from popcorn.kernels.rms_norm_gated import rms_norm_gated
 from popcorn.kernels.rms_norm_linear import rms_norm_linear
@@ -86,6 +95,7 @@ from popcorn.kernels.rope import rope
 from popcorn.kernels.rotary_embedding import rotary_embedding
 from popcorn.kernels.rwkv4 import rwkv4
 from popcorn.kernels.rwkv6 import rwkv6
+from popcorn.kernels.rwkv6_decode import rwkv6_decode
 from popcorn.kernels.rwkv7 import rwkv7
 from popcorn.kernels.rwkv7_addcmul import rwkv7_addcmul
 from popcorn.kernels.rwkv7_channel_mixing import rwkv7_channel_mixing
@@ -94,6 +104,7 @@ from popcorn.kernels.rwkv7_k_update import rwkv7_k_update
 from popcorn.kernels.selective_log_softmax import selective_log_softmax
 from popcorn.kernels.sigmoid import sigmoid
 from popcorn.kernels.simple_gla import simple_gla
+from popcorn.kernels.simple_gla_decode import simple_gla_decode
 from popcorn.kernels.softmax import softmax
 from popcorn.kernels.solve_tril import solve_tril
 from popcorn.kernels.sparsemax import sparsemax
@@ -113,25 +124,32 @@ __all__ = [
     "add_rms_norm",
     "addmm",
     "attn",
+    "attn_decode",
     "attn_varlen",
     "based",
     "bias_gelu",
     "bit_linear",
+    "causal_conv1d_update",
     "chunk_global_cumsum",
     "chunk_local_cumsum",
     "comba",
+    "comba_decode",
     "cross_entropy",
     "delta_rule",
+    "delta_rule_decode",
     "deltaformer",
     "dyt",
     "embedding",
     "forgetting_attn",
     "gated_delta_product",
     "gated_delta_rule",
+    "gated_delta_rule_decode",
     "gated_oja_rule",
+    "gated_oja_rule_decode",
     "geglu",
     "gelu",
     "gla",
+    "gla_decode",
     "group_norm",
     "group_norm_linear",
     "grpo",
@@ -139,10 +157,12 @@ __all__ = [
     "gsa",
     "hadamard_transform",
     "hgrn",
+    "hgrn_decode",
     "int8_int2_matmul",
     "iplr_delta_rule",
     "jsd",
     "kda",
+    "kda_decode",
     "kda_gate",
     "kda_gate_cumsum",
     "kl_div",
@@ -154,6 +174,7 @@ __all__ = [
     "layer_norm_swish_linear",
     "lightning_attn",
     "linear_attn",
+    "linear_attn_decode",
     "linear_cross_entropy",
     "linear_jsd",
     "linear_kl_div",
@@ -175,6 +196,7 @@ __all__ = [
     "qwen2vl_mrope",
     "rebased",
     "retention",
+    "retention_decode",
     "rms_norm",
     "rms_norm_gated",
     "rms_norm_linear",
@@ -184,6 +206,7 @@ __all__ = [
     "rotary_embedding",
     "rwkv4",
     "rwkv6",
+    "rwkv6_decode",
     "rwkv7",
     "rwkv7_addcmul",
     "rwkv7_channel_mixing",
@@ -192,6 +215,7 @@ __all__ = [
     "selective_log_softmax",
     "sigmoid",
     "simple_gla",
+    "simple_gla_decode",
     "softmax",
     "solve_tril",
     "sparsemax",
