@@ -1,12 +1,11 @@
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
-    test_shapes={"batch": Range(1, 2), "seq": Range(2, 16), "hidden": {64}},
     tags={Tag.FEATURE_MIXER, Tag.FUSED},
 )
 def rwkv7_k_update(

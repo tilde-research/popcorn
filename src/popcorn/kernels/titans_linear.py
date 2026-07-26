@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
@@ -14,7 +14,6 @@ def _standardize(x, eps):
 
 
 @register_kernel(
-    test_shapes={"batch": Range(1, 4), "seq": {32}, "heads": {2}, "head_dim": {16}},
     test_args={"eps": [1e-6], "chunk_size": [16]},
     test_inputs={
         "q": lambda t: F.normalize(t, dim=-1),

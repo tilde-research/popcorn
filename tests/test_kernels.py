@@ -44,10 +44,18 @@ def test_dim_names_are_canonical():
     used = set().union(*(op._dims for op in KERNELS.values()))
     assert used - DIMS.keys() == set(), f"undeclared dim names: {sorted(used - DIMS.keys())}"
     assert DIMS.keys() - used == set(), f"unused vocabulary entries: {sorted(DIMS.keys() - used)}"
-    redundant = [
-        f"{op.name}:{name}" for op in KERNELS.values() for name, spec in op.test_shapes.items() if spec == DIMS.get(name)
-    ]
-    assert not redundant, f"test_shapes repeating the canonical pool: {redundant}"
+
+
+def test_scalar_args_are_classified():
+    """Every kernel scalar is SPEED (timing) or NEUTRAL (ignored for timing)."""
+    import popcorn.kernels  # noqa: F401
+    from popcorn import KERNELS
+    from popcorn.core.args import KNOWN_ARGS, NEUTRAL_ARGS, SPEED_ARGS
+
+    used = set().union(*(op.arg_pools for op in KERNELS.values()))
+    assert used - KNOWN_ARGS == set(), f"unclassified scalar args: {sorted(used - KNOWN_ARGS)}"
+    assert SPEED_ARGS - used == set(), f"unused SPEED_ARGS: {sorted(SPEED_ARGS - used)}"
+    assert NEUTRAL_ARGS - used == set(), f"unused NEUTRAL_ARGS: {sorted(NEUTRAL_ARGS - used)}"
 
 
 def test_adapters_are_import_free():
@@ -82,7 +90,7 @@ def test_backend_matches_reference(op, backend):
     trials = int(os.getenv("POPCORN_TEST_TRIALS", "2"))
     limit = int(os.getenv("POPCORN_TEST_LIMIT", "24"))
     records = op.bench.run_backend(backend, trials=trials, limit=limit)
-    grid = {case.case_id: case for case in cases(op)}
+    grid = {case.case_id: case for case in cases(op, limit=limit)}
     records = [
         op.bench.run_case(backend, grid[record.case_id], trials=10, benchmark=False)
         if record.result.status == "fail"

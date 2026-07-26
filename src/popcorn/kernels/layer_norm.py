@@ -2,7 +2,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
 @register_kernel(test_args={"eps": [1e-6, 1e-5]}, tags={Tag.NORMALIZATION})
@@ -23,17 +23,13 @@ def layer_norm(
 
 # rows of one element are degenerate (grad x is exactly zero); fla's backward
 # returns junk there.
-@layer_norm.register("fla", source="fla.modules.layernorm.layer_norm", supports={"normalized_shape": Range(2, 1 << 20)})
+@layer_norm.register("fla", source="fla.modules.layernorm.layer_norm")
 def layer_norm_fla(x, weight, bias, eps):
     return kernel(x, weight, bias, eps=eps)
 
 
 # tiny rows lose precision in liger's backward; see ISSUES.md.
-@layer_norm.register(
-    "liger",
-    source="liger_kernel.transformers.functional.liger_layer_norm",
-    supports={"normalized_shape": Range(8, 1 << 20)},
-)
+@layer_norm.register("liger", source="liger_kernel.transformers.functional.liger_layer_norm")
 def layer_norm_liger(x, weight, bias: Float[Tensor, "normalized_shape"], eps):
     return kernel(x, weight, bias, eps)
 

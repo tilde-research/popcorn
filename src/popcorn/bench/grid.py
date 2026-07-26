@@ -1,60 +1,106 @@
 """Test-case grids and randomized inputs derived from kernel signatures."""
 
-import itertools
+import math
 import random
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import torch
 
 from popcorn.bench.model import Case
 from popcorn.core.annotations import token_size
-from popcorn.core.constraints import Range, satisfies
 from popcorn.core.dims import DIMS
+from popcorn.core.spaces import space
 
 # `op` stays `Any` here: the layering test forbids this module from importing
 # the dispatcher, even for annotations.
 
-GRID = (1, 2, 3, 8, 16, 33, 64, 128, 1024, 4096)
+# Seeds fed into Space.grid: adversarial shorts (tile±1), powers of two, then
+# a few mid/long context lengths so Range-based pools don't only hit endpoints.
+GRID = (
+    1,
+    2,
+    3,
+    8,
+    16,
+    17,
+    33,
+    64,
+    65,
+    128,
+    129,
+    256,
+    512,
+    1024,
+    2048,
+    4096,
+    8192,
+    32768,
+    131072,
+    1048576,
+)
 BATCHES = ((), (2, 3), (2, 2048))
 DTYPES = (torch.float32, torch.float16, torch.bfloat16)
 
+# Refuse to materialize a full cartesian product past this; pass `limit=`.
+_MAX_FULL_GRID = 100_000
 
-def _dim_pool(op: Any, name: str) -> list[int]:
-    spec = op.test_shapes.get(name, DIMS.get(name))
-    candidates = set(GRID)
-    for atom in spec if isinstance(spec, tuple) else (spec,):
-        match atom:
-            case Range(lo, hi):
-                candidates |= {lo, hi}
-            case set() | frozenset():
-                candidates = set(atom)
-    pool = sorted(value for value in candidates if spec is None or satisfies(spec, value))
-    if not pool:
-        raise ValueError(f"test_shapes spec {spec} admits no sizes")
-    return pool
+
+def _dim_pool(_op: Any, name: str) -> list[int]:
+    """Pool for `name` from the global `DIMS` vocabulary (unknown → `GRID`)."""
+    spec = DIMS.get(name)
+    if spec is None:
+        return list(GRID)
+    return space(spec).grid(seeds=GRID)
+
+
+def _unrank(index: int, sizes: Sequence[int]) -> list[int]:
+    coords = []
+    for size in reversed(sizes):
+        coords.append(index % size)
+        index //= size
+    coords.reverse()
+    return coords
 
 
 def cases(op: Any, limit: int | None = None) -> list[Case]:
+    """Sample the dim × arg × presence × dtype × batch product.
+
+    Never builds the full cartesian list when `limit` is set — ranks into the
+    product space instead — so wide `DIMS` pools stay cheap.
+    """
     if missing := [name for name, pool in op.arg_pools.items() if pool is None]:
         raise TypeError(f"{op.name}: arguments {missing} need test_args, a default, or a Literal annotation")
-    dim_axes = [[(name, value) for value in _dim_pool(op, name)] for name in sorted(op._dims)]
-    arg_axes = [[(name, value) for value in pool] for name, pool in sorted(op.arg_pools.items()) if pool is not None]
-    presence_axes = [[(name, False), (name, True)] for name in sorted(spec.param for spec in op.specs if spec.optional)]
-    dtypes = DTYPES if any("float" in dtype for spec in op.specs for dtype in spec.dtypes) else (torch.float32,)
-    batches = BATCHES if any(... in spec.tokens for spec in op.specs) else ((),)
-    product = itertools.product(
-        itertools.product(*dim_axes),
-        itertools.product(*arg_axes),
-        itertools.product(*presence_axes),
-        dtypes,
-        batches,
-    )
-    grid = [
-        Case(dims, batch, dtype, args, frozenset(name for name, enabled in presence if enabled))
-        for dims, args, presence, dtype, batch in product
-    ]
-    return random.Random(0).sample(grid, limit) if limit and len(grid) > limit else grid
+    dim_names = sorted(op._dims)
+    dim_pools = [_dim_pool(op, name) for name in dim_names]
+    arg_names = [name for name, pool in sorted(op.arg_pools.items()) if pool is not None]
+    arg_pools = [list(op.arg_pools[name]) for name in arg_names]
+    opt_names = sorted(spec.param for spec in op.specs if spec.optional)
+    dtypes = list(DTYPES if any("float" in dtype for spec in op.specs for dtype in spec.dtypes) else (torch.float32,))
+    batches = list(BATCHES if any(... in spec.tokens for spec in op.specs) else ((),))
+    sizes = [len(pool) for pool in dim_pools] + [len(pool) for pool in arg_pools] + [2] * len(opt_names) + [len(dtypes), len(batches)]
+    if any(size == 0 for size in sizes):
+        return []
+    total = math.prod(sizes)
+    if limit is None and total > _MAX_FULL_GRID:
+        raise ValueError(f"{op.name}: full grid has {total} cases; pass limit=")
+    rng = random.Random(0)
+    indices = range(total) if limit is None or total <= limit else rng.sample(range(total), limit)
+
+    def build(index: int) -> Case:
+        coords = _unrank(index, sizes)
+        cursor = 0
+        dims = [(name, pool[coords[cursor + offset]]) for offset, (name, pool) in enumerate(zip(dim_names, dim_pools))]
+        cursor += len(dim_names)
+        args = [(name, pool[coords[cursor + offset]]) for offset, (name, pool) in enumerate(zip(arg_names, arg_pools))]
+        cursor += len(arg_names)
+        present = frozenset(name for offset, name in enumerate(opt_names) if coords[cursor + offset])
+        cursor += len(opt_names)
+        dtype = dtypes[coords[cursor]]
+        batch = batches[coords[cursor + 1]]
+        return Case(tuple(dims), batch, dtype, tuple(args), present)
+
+    return [build(index) for index in indices]
 
 
 def _transform(

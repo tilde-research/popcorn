@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/kernels-96-blue" alt="kernels"/>
   <img src="https://img.shields.io/badge/backends-7-blue" alt="backends"/>
   <img src="https://img.shields.io/badge/implementations-117-blue" alt="implementations"/>
-  <img src="https://img.shields.io/badge/grid%20rows-22%2C452-blue" alt="grid rows"/>
+  <img src="https://img.shields.io/badge/grid%20rows-25%2C464-blue" alt="grid rows"/>
 </p>
 <!-- /popcorn:badges -->
 
@@ -112,9 +112,9 @@ output = rms_norm(x, weight, backend="liger")
 
 Each call resolves to one implementation in three steps:
 
-1. **Eligibility.** An implementation is a candidate only when its package is installed at a supported version, it has a backward pass if the call needs gradients, and the inputs satisfy its declared shape, dtype, and value constraints.
-2. **Correctness.** Implementations with a recorded failure for this exact case are excluded. Selecting one that has no recorded pass emits `UnvalidatedWarning` once (see [Validation](#validation)).
-3. **Speed.** Among the remaining candidates, the fastest wins, judged by the nearest recorded benchmark on the same device, dtype, and gradient mode. The reference competes on equal terms: when it measures fastest, it is selected. Without benchmark data, candidates are tried in registration order, reference last.
+1. **Eligibility.** An implementation is a candidate only when its package is installed at a supported version, it has a backward pass if the call needs gradients, and the inputs satisfy its dtype/value gates.
+2. **Correctness.** Exact recorded failures are excluded. Automatic selection further requires an exact pass row or membership in a fitted validity region (learned from the report table); otherwise the reference serves the call.
+3. **Speed.** Among the remaining candidates, the fastest wins, judged by the nearest recorded benchmark on the same device, dtype, and gradient mode. The reference competes on equal terms: when it measures fastest — or when timings are within a small indifference margin — it is selected.
 
 The decision is memoized per call configuration (shapes, dtypes, device, gradient mode, and scalar arguments), so dispatch adds negligible overhead in steady state. New validation records, benchmarks, or registrations invalidate the memo.
 
@@ -133,16 +133,9 @@ print(rms_norm)                               # signature and per-implementation
 
 A forced implementation never falls back: it raises `DispatchError` when it cannot serve the call, whether because its package is missing (the error names the install extra), the inputs are unsupported, or the case has a recorded failure (the error carries the recorded reason).
 
-#### Validation flags
+#### Lazy measurement
 
-Two flags harden dispatch, per call as keyword arguments or process-wide as environment variables:
-
-| Per call | Process-wide | Effect |
-|---|---|---|
-| `validate=True` | `POPCORN_VALIDATE=1` | Validate unrecorded cases synchronously before dispatch; only implementations with a recorded pass are selected. |
-| `bench=True` | `POPCORN_BENCH=1` | Additionally record timings and select the exact fastest implementation. Takes precedence over `validate`. |
-
-The keyword flags only enable: a call cannot opt out of a mode set in the environment. Both modes run synchronously inside the call, so a first encounter with a new configuration may compile and check every candidate before returning. Results land in the user cache, `${XDG_CACHE_HOME:-~/.cache}/popcorn` by default, overridden with `POPCORN_CACHE_DIR`.
+`bench=True` or `POPCORN_BENCH=1` measures and records on first encounter with a missing conclusive row, then uses the new evidence for selection. Results land in the user cache, `${XDG_CACHE_HOME:-~/.cache}/popcorn` by default, overridden with `POPCORN_CACHE_DIR`. Validity regions are filled offline with `python -m popcorn.bench map`.
 
 ### Registration
 
@@ -178,16 +171,16 @@ results = rms_norm.validate(x, weight)
 assert all(result.status == "pass" for result in results)
 ```
 
-Results are stored per case, device, PyTorch version, backend version, and gradient mode, and are stamped with a fingerprint of the kernel code: results recorded for a since-edited reference or implementation are ignored (comments and formatting don't count). A known failure is removed from automatic dispatch; an unvalidated implementation remains usable but emits `UnvalidatedWarning`.
+Results are stored per case, device, PyTorch version, backend version, and gradient mode, and are stamped with a fingerprint of the kernel code: results recorded for a since-edited reference or implementation are ignored (comments and formatting don't count). A known failure is removed from automatic dispatch; without a pass row or fitted region, the reference is used.
 
-`validate` always re-runs the comparison. To instead validate on first use, only where a conclusive record is missing, pass `validate=True` to the call or enable it for the whole application:
+`validate` always re-runs the comparison. To measure on first use where a conclusive record is missing:
 
 ```python
-output = rms_norm(x, weight, validate=True)
+output = rms_norm(x, weight, bench=True)
 ```
 
 ```bash
-POPCORN_VALIDATE=1 python train.py
+POPCORN_BENCH=1 python train.py
 ```
 
 ### Benchmarking

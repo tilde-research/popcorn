@@ -2,12 +2,11 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
 @register_kernel(
-    test_shapes={"seq": Range(2, 256)},
     test_args={"softmax_scale": [None, 0.25]},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
 )

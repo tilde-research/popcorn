@@ -2,7 +2,7 @@ import torch
 from jaxtyping import Int8, Int32
 from torch import Tensor
 
-from popcorn import Div, Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
 def _int8_input(tensor, _dims, generator):
@@ -13,15 +13,8 @@ def _int2_input(tensor, _dims, generator):
     return torch.randint(-1, 2, tensor.shape, generator=generator).to(torch.int8)
 
 
-@register_kernel(
-    test_shapes={"rows": Range(1, 128), "inner": {512}, "cols": Range(1, 128)},
-    test_inputs={"a": _int8_input, "b": _int2_input},
-    tags={Tag.LINEAR, Tag.QUANTIZED},
-)
-def int8_int2_matmul(
-    a: Int8[Tensor, "rows inner"],
-    b: Int8[Tensor, "inner cols"],
-) -> Int32[Tensor, "rows cols"]:
+@register_kernel(test_inputs={"a": _int8_input, "b": _int2_input}, tags={Tag.LINEAR, Tag.QUANTIZED})
+def int8_int2_matmul(a: Int8[Tensor, "rows inner"], b: Int8[Tensor, "inner cols"]) -> Int32[Tensor, "rows cols"]:
     r"""Integer matrix product with int8 activations and ternary int2 weights.
 
     $$y = a b, \qquad a \in \mathbb{Z}_{\mathrm{int8}}, \; b \in \{-1, 0, 1\}$$
@@ -34,11 +27,6 @@ def int8_int2_matmul(
 
 # the module source serves both callables: liger packs four ternary weights
 # per byte before its matmul.
-@int8_int2_matmul.register(
-    "liger",
-    source="liger_kernel.ops.experimental.mm_int8int2",
-    supports={"inner": Div(512)},
-    forward_only=True,
-)
+@int8_int2_matmul.register("liger", source="liger_kernel.ops.experimental.mm_int8int2", forward_only=True)
 def int8_int2_matmul_liger(a, b):
     return kernel.matmul(a, kernel.pack_weights(b.clone()))

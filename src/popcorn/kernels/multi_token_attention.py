@@ -5,12 +5,11 @@ import torch.nn.functional as F
 from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
 @register_kernel(
-    test_shapes={"channels": {4}, "seq": Range(8, 128)},
     test_args={"padding": [0, 2]},
     tags={Tag.SEQUENCE_MIXER, Tag.ATTENTION, Tag.FUSED},
 )

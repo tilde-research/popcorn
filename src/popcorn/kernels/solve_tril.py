@@ -14,11 +14,7 @@ def _strict_lower(A, dims, _generator):
     return A * mask[None, :, None, :] * 0.05
 
 
-@register_kernel(
-    test_shapes={"batch": {1}, "seq": {16, 23}, "heads": {2}},
-    test_inputs={"A": _strict_lower},
-    tags={Tag.LINEAR},
-)
+@register_kernel(test_inputs={"A": _strict_lower}, tags={Tag.LINEAR})
 def solve_tril(A: Float[Tensor, "batch seq heads block_size"]) -> Float[Tensor, "batch seq heads block_size"]:
     r"""Invert each block of a chunked unit-lower-triangular matrix.
 
@@ -35,11 +31,6 @@ def solve_tril(A: Float[Tensor, "batch seq heads block_size"]) -> Float[Tensor, 
     return torch.cat(chunks, 1).to(A.dtype)
 
 
-@solve_tril.register(
-    "fla",
-    source="fla.ops.utils.solve_tril",
-    supports={"block_size": {16, 32, 64}},
-    forward_only=True,
-)
+@solve_tril.register("fla", source="fla.ops.utils.solve_tril", forward_only=True)
 def solve_tril_fla(A):
     return kernel(A, output_dtype=A.dtype)

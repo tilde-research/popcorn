@@ -9,7 +9,6 @@ from popcorn.kernels._utils import upcast
 # seq must be a multiple of mini_batch_size; the singleton pool keeps the grid
 # on 16-aligned lengths.
 @register_kernel(
-    test_shapes={"seq": {64}, "head_dim": {32}},
     test_inputs={
         "eta": lambda t: torch.sigmoid(t) * 0.02,
         "w": lambda t: 1 + 0.1 * t,

@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
 @register_kernel(test_args={"eps": [1e-6, 1e-5]}, tags={Tag.NORMALIZATION, Tag.ACTIVATION, Tag.FUSED})
@@ -29,8 +29,6 @@ def layer_norm_gated(
 
 # rows of one element are degenerate (grad x is exactly zero); fla's backward
 # returns junk there.
-@layer_norm_gated.register(
-    "fla", source="fla.modules.fused_norm_gate.layer_norm_gated", supports={"hidden": Range(2, 1 << 20)}
-)
+@layer_norm_gated.register("fla", source="fla.modules.fused_norm_gate.layer_norm_gated")
 def layer_norm_gated_fla(x, g, weight, bias, activation, eps):
     return kernel(x, g, weight, bias, activation=activation, eps=eps)

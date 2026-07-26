@@ -2,11 +2,11 @@ import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Pow2, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
-@register_kernel(test_shapes={"hidden": Pow2()}, test_args={"scale": [1.0, 0.5]}, tags={Tag.LINEAR})
+@register_kernel(test_args={"scale": [1.0, 0.5]}, tags={Tag.LINEAR})
 def hadamard_transform(x: Float[Tensor, "... hidden"], scale: float = 1.0) -> Float[Tensor, "... hidden"]:
     r"""Sylvester Hadamard transform along the last dimension (a power of two).
 

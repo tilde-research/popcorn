@@ -2,12 +2,10 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Div, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 
 
-@register_kernel(
-    test_shapes={"channels": Div(4)}, test_args={"num_groups": [1, 4], "eps": [1e-6, 1e-5]}, tags={Tag.NORMALIZATION}
-)
+@register_kernel(test_args={"num_groups": [1, 4], "eps": [1e-6, 1e-5]}, tags={Tag.NORMALIZATION})
 def group_norm(
     x: Float[Tensor, "tokens channels"],
     weight: Float[Tensor, "channels"],

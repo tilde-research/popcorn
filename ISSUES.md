@@ -3,8 +3,9 @@
 Confirmed upstream kernel bugs found by the harness. Adapter bugs do not belong
 here; they get fixed. Each entry names the op and backend, the failing case,
 the observed error, and how to reproduce it. Backends listed here stay
-registered with `supports`/`predicate` narrowed (or `forward_only=True`) so
-dispatch avoids the broken region and the support matrix reports it honestly.
+gated with `predicate` / dtype annotations / `forward_only=True`, or excluded by
+learned validity regions from the report table, so dispatch avoids the broken
+region and the support matrix reports it honestly.
 
 Reproduce any entry with:
 
@@ -91,7 +92,7 @@ uv run python -m popcorn.bench run <op> --backend <backend>
 - Error: `grad x: err 3.918e+02 > max(2*4.344e-01, 1e-03*1341.4)`
 - Cause: the backward loses catastrophically on rows of 2-3 elements while
   torch stays exact (liger-kernel 0.6.4, `liger_kernel/ops/layer_norm.py`).
-- Marking: backend registered with `supports={"normalized_shape": Range(8, ...)}`.
+- Marking: learned validity region (was `supports` Range starting at 8); re-map with `bench map`.
 
 ## layer_norm family / fla (rows of one element)
 
@@ -102,7 +103,7 @@ uv run python -m popcorn.bench run <op> --backend <backend>
   grows with `out_features` (flash-linear-attention 0.4.2,
   `fla/modules/layernorm.py`). Applies to `layer_norm`, `layer_norm_gated`,
   `layer_norm_linear`, and `layer_norm_linear_quant`.
-- Marking: backends registered with `supports` starting at 2.
+- Marking: learned validity region (was `supports` Range starting at 2); re-map with `bench map`.
 
 ## linear_attn / fla (short sequences)
 
@@ -185,7 +186,7 @@ uv run python -m popcorn.bench run <op> --backend <backend>
   but disagrees with fla's own `naive_log_linear_attn` on those inputs
   (`heads=1` matches to 1e-4); its backward also returns grad `q` with `k`'s
   single-head shape (flash-linear-attention 0.4.2, `fla/ops/log_linear_attn`).
-- Marking: backend registered with `supports={"heads": {1}}`.
+- Marking: learned validity region / dtype gates (was `supports heads={1}`); re-map with `bench map`.
 
 ## ttt / fla (backward accuracy)
 
@@ -250,7 +251,7 @@ uv run python -m popcorn.bench run <op> --backend <backend>
 - Cause: with 1-2 elements the rms terms are nearly degenerate (`norm(x)` is
   close to `sign(x)`), and the kernel's bf16 backward loses the cancellation
   torch preserves (liger-kernel 0.6.4, `liger_kernel/ops/poly_norm.py`).
-- Marking: backend registered with `supports={"hidden": Range(3, ...)}`.
+- Marking: learned validity region (was `supports` Range starting at 3); re-map with `bench map`.
 
 ## comba / fla (fp16 gradients)
 

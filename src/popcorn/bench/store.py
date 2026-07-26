@@ -28,7 +28,7 @@ def user_reports() -> Path:
 
 
 def conclusive(record: Record) -> bool:
-    return record.result.status in ("pass", "fail", "crash")
+    return record.result.status in ("pass", "fail", "crash", "oom")
 
 
 def matching(expected: str | None, recorded: str | None) -> bool:

@@ -12,9 +12,7 @@ from popcorn.kernels._utils import upcast
 # levels must equal ceil(log2(seq)) + 1; singleton test pools keep the grid
 # consistent.
 @register_kernel(
-    test_shapes={"seq": {64}, "heads": {1}},
-    test_inputs={"g": F.logsigmoid, "level_scales": torch.sigmoid},
-    tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
+    test_inputs={"g": F.logsigmoid, "level_scales": torch.sigmoid}, tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION}
 )
 def log_linear_attn(
     q: Float[Tensor, "batch seq heads key_dim"],
@@ -50,12 +48,8 @@ def log_linear_attn(
 # single head only: with more the kernel diverges from fla's own naive
 # reference and the backward returns misshapen gradients; see ISSUES.md.
 # float16 value gradients land just past tolerance; fp32 and bf16 hold.
-@log_linear_attn.register("fla", source="fla.ops.log_linear_attn.chunk_log_linear_attn", supports={"heads": {1}})
+@log_linear_attn.register("fla", source="fla.ops.log_linear_attn.chunk_log_linear_attn")
 def log_linear_attn_fla(
-    q: Float32[Tensor, "batch seq heads key_dim"] | BFloat16[Tensor, "batch seq heads key_dim"],
-    k,
-    v,
-    g,
-    level_scales,
+    q: Float32[Tensor, "batch seq heads key_dim"] | BFloat16[Tensor, "batch seq heads key_dim"], k, v, g, level_scales
 ):
     return kernel(q, k, v, g, level_scales)[0]

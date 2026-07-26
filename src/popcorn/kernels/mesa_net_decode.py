@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Range, Tag, kernel, register_kernel
+from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
@@ -17,12 +17,6 @@ def _log_decay(t):
 
 
 @register_kernel(
-    test_shapes={
-        "batch": Range(1, 4),
-        "heads": {2},
-        "key_dim": {16},
-        "value_dim": {16},
-    },
     test_args={"max_cg_iterations": [1, 3]},
     test_inputs={
         "q": lambda t: 0.1 * t,
@@ -58,10 +52,7 @@ def mesa_net_decode(
     [Uncovering mesa-optimization algorithms in Transformers (von Oswald et al., 2023)](https://arxiv.org/abs/2309.05858),
     [MesaNet (von Oswald et al., 2025)](https://arxiv.org/abs/2506.05233)
     """
-    q32, k32, v32, g32, lamb32, beta32, h_kk, h_kv = map(
-        upcast,
-        (q, k, v, g, lamb, beta, prev_h_kk, prev_h_kv),
-    )
+    q32, k32, v32, g32, lamb32, beta32, h_kk, h_kv = map(upcast, (q, k, v, g, lamb, beta, prev_h_kk, prev_h_kv))
     weighted_k = k32 * beta32[..., None]
     decay = g32.exp()[..., None, None]
     h_kk = h_kk * decay + weighted_k[..., None] * k32[..., None, :]
@@ -88,31 +79,6 @@ def mesa_net_decode(
     return out.to(q.dtype), h_kk.to(prev_h_kk.dtype), h_kv.to(prev_h_kv.dtype)
 
 
-@mesa_net_decode.register(
-    "fla",
-    source="fla.ops.mesa_net.mesa_net_decoding_one_step",
-    supports={"key_dim": Range(1, 128), "value_dim": Range(1, 128)},
-    forward_only=True,
-)
-def mesa_net_decode_fla(
-    q,
-    k,
-    v,
-    g,
-    lamb,
-    beta,
-    prev_h_kk,
-    prev_h_kv,
-    max_cg_iterations,
-):
-    return kernel(
-        q,
-        k,
-        v,
-        g,
-        lamb,
-        beta,
-        prev_h_kk,
-        prev_h_kv,
-        max_CG_iteration=max_cg_iterations,
-    )
+@mesa_net_decode.register("fla", source="fla.ops.mesa_net.mesa_net_decoding_one_step", forward_only=True)
+def mesa_net_decode_fla(q, k, v, g, lamb, beta, prev_h_kk, prev_h_kv, max_cg_iterations):
+    return kernel(q, k, v, g, lamb, beta, prev_h_kk, prev_h_kv, max_CG_iteration=max_cg_iterations)

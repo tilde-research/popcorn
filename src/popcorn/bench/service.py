@@ -30,9 +30,10 @@ def _enabled(name: str) -> bool:
 
 
 def validation_mode(bench: bool | None = None, validate: bool | None = None) -> str | None:
-    bench = bench or _enabled("POPCORN_BENCH")
-    validate = validate or _enabled("POPCORN_VALIDATE")
-    return "bench" if bench else "validate" if validate else None
+    """`POPCORN_BENCH=1` (or `bench=True`) lazily measures and records on first encounter."""
+    if bench or _enabled("POPCORN_BENCH"):
+        return "bench"
+    return None
 
 
 def _case_from_call(call: Call) -> Case:

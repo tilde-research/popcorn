@@ -36,7 +36,7 @@ def _op():
     def reference(x: Float[Tensor, "D"]):
         return x + 1
 
-    op = Dispatcher(reference, test_shapes={"D": {4}})
+    op = Dispatcher(reference)
     op.register("alt")(lambda x: x + 1)
     return op
 
@@ -114,10 +114,13 @@ def test_reference_precision_helpers():
     assert default_scale(0.0, 64) == 0.0
 
 
-def test_grid_is_deterministic_and_uses_canonical_config():
+def test_grid_is_deterministic_and_uses_canonical_config(monkeypatch):
+    from popcorn.core import dims as dims_mod
+
+    monkeypatch.setitem(dims_mod.DIMS, "D", {4})
     op = _op()
     grid = cases(op)
-    assert len(grid) == 3
+    assert len(grid) == 3  # D={4} × 3 dtypes × batch=()
     assert [case.case_id for case in grid] == [case.case_id for case in cases(op)]
     case = grid[0]
     inputs = make_inputs(op, case, "cpu")

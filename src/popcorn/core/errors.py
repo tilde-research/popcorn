@@ -15,7 +15,3 @@ class BackendUnavailableError(PopcornError):
 
 class BackendVersionError(PopcornError):
     """The backend's package is installed at an unsupported version."""
-
-
-class UnvalidatedWarning(UserWarning):
-    """A selected backend has no recorded validation pass for the exact call."""

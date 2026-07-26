@@ -70,7 +70,6 @@ Create `src/popcorn/kernels/<op>.py` with a pure-torch reference and decorate it
 
 ```python
 @register_kernel(
-    test_shapes={"normalized_shape": Range(64, 8192)},
     test_args={"eps": [1e-6, 1e-5]},
     tags={Tag.NORMALIZATION},
 )
@@ -89,15 +88,14 @@ def rms_norm(
     ...
 ```
 
-`@register_kernel(fn, *, test_shapes=None, test_args=None, test_inputs=None, name=None, tags=None)`
+`@register_kernel(fn, *, test_args=None, test_inputs=None, name=None, tags=None)`
 
-- `test_shapes`: `{dim: Range | set}`, overrides the dim's canonical pool (`popcorn/core/dims.py`) — declare one only where the kernel demands it; derived dims (`response+1`) take no entry — they follow their base
 - `test_args`: `{scalar: [values]}` to grid over; scalars without an entry derive their pool from a `Literal` annotation, `bool`, or the default
 - `test_inputs`: `{tensor param: transform}` applied to the raw random draw when the op needs structured inputs (probabilities, log-space gates, normalized keys). A 1-arg transform gets the draw; a 3-arg transform gets `(draw, dims, generator)` for inputs built from the case dims, e.g. `cu_seqlens` offsets (see `src/popcorn/kernels/_varlen.py`)
 - `name`: op name, defaults to the function name
 - `tags`: a set of `Tag` members classifying the op; most kernels wear several
 
-The reference is the contract: jaxtyping annotations on every tensor and return, plain or `Literal` annotations on scalars (default value first), every default declared here, differentiable, and half precision upcast for reductions. Single-tensor returns also get a `torch.ops.popcorn` binding. No branching on backends or devices. `test_shapes` and `test_args` generate the grid only; runtime validation comes from exact report rows.
+The reference is the contract: jaxtyping annotations on every tensor and return, plain or `Literal` annotations on scalars (default value first), every default declared here, differentiable, and half precision upcast for reductions. Single-tensor returns also get a `torch.ops.popcorn` binding. No branching on backends or devices. Dim pools come from `popcorn/core/dims.py` (`DIMS`); `test_args` only grids scalars. Runtime shape validity comes from report rows / fitted regions, not per-op declarations.
 
 ### The docstring
 
@@ -121,13 +119,16 @@ All tags live in `src/popcorn/core/tags.py` — read it before tagging, and add 
 
 ## 3. Bind a kernel from a declared library
 
-`@op.register(name, source=None, supports=None, predicate=None, forward_only=False)`
+`@op.register(name, source=None, predicate=None, forward_only=False)`
 
 - `name`: backend name
 - `source`: dotted path to the external kernel, imported lazily on first dispatch; trailing segments may be attributes (`unsloth.kernels.layernorm.Fast_Layernorm.apply`), and a module path serves its members through `kernel` attributes (`kernel.matmul`); alone it must match the reference signature exactly
-- `supports`: `{dim: spec}` shape constraints; specs are exact sizes, sets, `Range`, `Div`, `Pow2`, callables, or tuples of these (all must hold)
-- `predicate`: `f(**args) -> bool` veto, last resort
+- `predicate`: `f(**args) -> bool` veto, last resort (poison-avoidance, not shape ranges)
 - `forward_only`: `True` for kernels without a backward; they decline autograd calls and the harness grades them forward-only
+
+Shape validity is learned from report rows (`python -m popcorn.bench map`), not declared. Dim probe pools live only in `DIMS` (`popcorn/core/dims.py`); the fitter turns pass/fail/oom labels into regions. Scalar kwargs are classified once in `popcorn/core/args.py` (`SPEED_ARGS` vs `NEUTRAL_ARGS`): discrete values exact-match in the validity stratum, floats fit as `Real` bands like dims, and only `SPEED_ARGS` participate in timing nearest-neighbor.
+
+Dispatch admission and ranking live on `op.tuner.policy` (`popcorn.core.policy.Policy`). The default is safe (outside a fitted region → torch). `unsafe=True` on the call (or `POPCORN_UNSAFE=1`) extrapolates for backends that already have a proven range, then picks the nearest timed neighbor — replace or subclass `Policy` to change that.
 
 Source matches the reference signature:
 
@@ -144,7 +145,7 @@ def rms_norm_liger(x, weight, bias: Literal[None], eps):   # dispatched only whe
 ```
 
 > [!TIP]
-> Backend name: the library's short lowercase name (`liger`); `liger:chunked` only when one library ships several implementations of the op. Adapter: named `<op>_<backend>`, body is argument mapping only, and never an import — every library callable arrives through `source=`, which keeps it lazy and fingerprinted; any arithmetic means different semantics, which means a different op. Backends listed alphabetically in the file; benchmarks decide speed, not order. Value and dtype constraints are narrowed annotations; shape constraints use `supports=`, always the least expressive spec that fits.
+> Backend name: the library's short lowercase name (`liger`); `liger:chunked` only when one library ships several implementations of the op. Adapter: named `<op>_<backend>`, body is argument mapping only, and never an import — every library callable arrives through `source=`, which keeps it lazy and fingerprinted; any arithmetic means different semantics, which means a different op. Backends listed alphabetically in the file; benchmarks decide speed, not order. Value and dtype constraints are narrowed annotations; shape ranges are learned from the report table.
 
 > [!NOTE]
 > → Binding done: [5. Verify](#5-verify)
@@ -238,16 +239,17 @@ result = compare(mine, reference, {"x": x, "weight": weight})
 | status | meaning | action |
 |---|---|---|
 | pass | worst error across reps within tolerance | none |
-| skip | backend declined the case (gates, `supports`, package) | none, expected |
-| fail | numeric divergence | fix the adapter mapping, or narrow gates/`supports` |
+| skip | backend declined the case (gates, package) | none, expected |
+| fail | numeric divergence | fix the adapter mapping, or narrow gates |
 | crash | the implementation raised during correctness | see the reason column |
+| oom | out of memory (censored; caps the fitted region) | shrink pools or accept the cap |
 | error | harness or worker failure, correctness unknown | fix the harness or rerun |
 
 A successful row may also have `bench_error`; correctness remains valid, but the timing must be rerun. In the detail matrix printed by `scripts/update_readme.py`, ✔ means every tested case passes, ✔* means at least one passes while another is gated, failed, or unverified, and ✘ means no case passes.
 
 `op.validate(*args, backend=None, **kwargs)` checks a real call without timing. `op.benchmark(*args, backend=None, **kwargs)` checks and times it. These APIs write `${POPCORN_CACHE_DIR:-${XDG_CACHE_HOME:-~/.cache}/popcorn}/v2/reports` and never modify checked-in reports or the README.
 
-At runtime, a selected optimized backend with no exact row emits `UnvalidatedWarning` once. `POPCORN_VALIDATE=1` synchronously validates missing rows before dispatch; `POPCORN_BENCH=1` also times them and selects the exact fastest backend. The first call may compile every eligible implementation. Do not hide this warning in library code; callers can use `warnings.filterwarnings`.
+Automatic dispatch admits a backend only with an exact pass row or membership in a fitted validity region (derived from report rows). Otherwise the reference serves the call. `POPCORN_BENCH=1` lazily measures and records on first encounter. Map regions with `python -m popcorn.bench map --effort standard`.
 
 > [!TIP]
 > Commit `src/popcorn/reports/*.jsonl`; they are the bundled database that tunes dispatch on contributor hardware. Reports and the README badges are machine-written, never edit them by hand. User-local cache rows are not committed.
