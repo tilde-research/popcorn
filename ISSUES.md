@@ -354,6 +354,23 @@ composition with these upstream bugs fixed (details in the file header):
   (flash-linear-attention 0.4.x, `fla/ops/path_attn/cumprod_householder_bwd.py`).
 - Marking: `forward_only=True`.
 
+## kda / fla:recurrent (memory-state-dependent non-finite outputs)
+
+- Case: 5 of 12 sampled grid cases, both fp32 and bf16, assorted shapes
+  (e.g. `batch=8, heads=1, key_dim=192, seq=65, value_dim=256`)
+- Error: `out0: err is non-finite` — one `value_dim`-sized row of the output
+  (256 of 133120 elements) comes back NaN.
+- Cause: `fused_recurrent_kda` only misbehaves under specific CUDA caching
+  allocator states: the same tensors run clean in a fresh process, and the
+  fp64/fp32 references and all inputs are finite. That signature points at an
+  uninitialized or out-of-bounds read in the upstream triton kernel
+  (flash-linear-attention 0.4.2), triggered when preceding allocations leave
+  the right garbage behind. Reproduce by instrumenting `_error` inside
+  `run_case` on case `069be4f4b502`; direct calls on the same inputs pass.
+- Marking: none — the fail rows stay in the report, so tuned dispatch never
+  routes those cases to `fla:recurrent`, and dispatch-time validation blocks
+  it elsewhere. Worth an upstream report.
+
 # Deferred ops
 
 Ops we looked at and did not port, and why.
