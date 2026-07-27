@@ -34,7 +34,13 @@ from typing import Any, cast
 import torch
 from torch._inductor import config as inductor_config
 from torch._inductor.custom_graph_pass import CustomGraphPass, get_hash_for_files
-from torch._inductor.pattern_matcher import PatternMatcherPass, fwd_only, joint_fwd_bwd, register_replacement
+from torch._inductor.pattern_matcher import (
+    PatternMatcherPass,
+    fwd_only,
+    joint_fwd_bwd,
+    register_replacement,
+    stable_topological_sort,
+)
 
 import popcorn.core.library
 from popcorn.bench import grid
@@ -47,7 +53,8 @@ log = logging.getLogger(__name__)
 
 PATTERNS = PatternMatcherPass(pass_name="popcorn")
 DTYPES = (torch.bfloat16, torch.float16, torch.float32)
-MAX_VARIANTS = 12
+MAX_VARIANTS = 24
+MAX_TRACE_GRID = 50_000  # sample huge grids: variants only need a small case per key, not the smallest
 TRACE_BUDGET = 10.0  # seconds per pattern trace; loopy references unroll into graphs not worth matching
 _MAGIC = 0.8377134043  # float scalars are traced with values nothing else uses
 _TRACED: set[tuple[str, torch.dtype]] = set()
@@ -85,17 +92,20 @@ def _size(case: Case) -> int:
 
 
 def _variants(op: Dispatcher, dtypes: frozenset[torch.dtype]) -> list[Case]:
-    """Smallest case per (dtype, present optionals, non-float scalars),
-    interleaved across dtypes so the cap starves none of them. Batched ops are
+    """Smallest case per (dtype, present optionals, non-float scalars, float
+    zeroness), interleaved across dtypes so the cap starves none of them. Zero
+    and nonzero floats are separate variants because references branch on them
+    (label smoothing, dropout) and the branch decides the traced graph — a
+    0.1-smoothing trace can never match a smoothing-free graph. Batched ops are
     traced with a rank-2 batch only: the matcher re-traces at the matched
     shapes, which generalizes across ranks, while rank-1 examples trace
     degenerate backwards (no batch reduction) that poison replacements."""
     batch = (2, 3) if any(... in spec.tokens for spec in op.specs) else ()
     best: dict[Any, Case] = {}
-    for case in grid.cases(op):
+    for case in grid.cases(op, limit=MAX_TRACE_GRID):
         if case.dtype not in dtypes or case.batch != batch:
             continue
-        scalars = tuple((name, value) for name, value in case.args if type(value) is not float)
+        scalars = tuple((name, value if type(value) is not float else value == 0.0) for name, value in case.args)
         key = (case.dtype, case.present, scalars)
         if key not in best or _size(case) < _size(best[key]):
             best[key] = case
@@ -214,7 +224,11 @@ class _PopcornPass(CustomGraphPass):
         if self.inner is not None:
             self.inner(graph)
         remove_noop_ops(graph)  # patterns are traced noop-free; align the graph before matching
-        PATTERNS.apply(graph)
+        if PATTERNS.apply(graph):
+            # Joint replacements are inserted at the forward output's position,
+            # so their backward half can precede the tangent chain it reads.
+            # Inductor only re-sorts when its own passes made changes.
+            stable_topological_sort(graph)
 
     def uuid(self) -> Any:
         stamps = "|".join(

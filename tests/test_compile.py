@@ -38,6 +38,20 @@ class TestRegistration:
         popcorn.compile.disable()
         assert torch._inductor.config.joint_custom_pre_pass is prior
 
+    def test_variants_sample_huge_grids_and_cover_float_branches(self):
+        """linear_cross_entropy's full grid is far over the enumeration cap:
+        variants must sample instead of registering nothing. Zero and nonzero
+        float scalars must both appear — references branch on them, and a
+        0.1-smoothing trace can never match the smoothing-free graphs
+        everyone actually compiles."""
+        from popcorn.compile import _variants
+
+        variants = _variants(KERNELS["linear_cross_entropy"], frozenset({torch.bfloat16}))
+        assert variants, "huge grid produced no variants"
+        keyed = {(case.present, dict(case.args)["reduction"], dict(case.args)["label_smoothing"] == 0.0) for case in variants}
+        assert (frozenset(), "mean", True) in keyed, "the all-defaults variant is missing"
+        assert any(not smooth_free for _, _, smooth_free in keyed), "no nonzero-smoothing variant"
+
     def test_wraps_existing_pass(self):
         calls = []
         sentinel = lambda graph: calls.append(1)  # noqa: E731
@@ -125,6 +139,34 @@ class TestCompiledGraphs:
         assert any("popcorn.rms_norm" in source for source in code), "no popcorn rewrite in the training graph"
         assert any("rms_norm_backward" in source for source in code), "backward not served by popcorn"
         assert torch.allclose(out, eager, atol=3e-2, rtol=3e-2)
+        assert torch.allclose(x.grad, gx, atol=3e-2, rtol=3e-2)
+        assert torch.allclose(model.weight.grad, gw, atol=3e-2, rtol=3e-2)
+
+    def test_interior_op_in_training_graph(self):
+        """The op's grad_out is computed mid-graph (not a tangent placeholder):
+        the joint replacement must not be inserted ahead of that chain."""
+        from torch._inductor.utils import run_and_get_code
+
+        model = HandwrittenRMSNorm(64).cuda()
+        x = torch.randn(8, 64, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+
+        def loss_fn(x: torch.Tensor) -> torch.Tensor:
+            return model(x).float().square().sum()
+
+        loss_fn(x).backward()
+        gx, gw = x.grad.clone(), model.weight.grad.clone()
+        x.grad = model.weight.grad = None
+
+        compiled = torch.compile(loss_fn)
+
+        def step(x: torch.Tensor) -> torch.Tensor:
+            loss = compiled(x)
+            loss.backward()
+            return loss
+
+        _, code = run_and_get_code(step, x)
+        assert any("popcorn.rms_norm" in source for source in code), "no popcorn rewrite in the training graph"
+        assert any("rms_norm_backward" in source for source in code), "backward not served by popcorn"
         assert torch.allclose(x.grad, gx, atol=3e-2, rtol=3e-2)
         assert torch.allclose(model.weight.grad, gw, atol=3e-2, rtol=3e-2)
 
