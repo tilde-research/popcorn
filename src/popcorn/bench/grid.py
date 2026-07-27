@@ -126,6 +126,8 @@ def make_inputs(
     generator = torch.Generator().manual_seed(seed)
     dims = dict(case.dims)
     inputs: dict[str, Any] = dict(case.args)
+    target = torch.device(device)
+    budget = torch.cuda.get_device_properties(target).total_memory if target.type == "cuda" else None
     for spec in op.specs:
         if spec.optional and spec.param not in case.present:
             inputs[spec.param] = None
@@ -137,6 +139,13 @@ def make_inputs(
             else:
                 shape.append(token_size(token, dims, inputs, spec.param))
         floating = any("float" in dtype for dtype in spec.dtypes)
+        # Tensors are drawn on the host first; an absurd case (e.g. seq=1M x hidden=28K,
+        # ~1TB) would get the process OOM-killed there before any exception can surface.
+        nbytes = math.prod(shape) * (4 if floating else 8)
+        if budget is not None and nbytes > budget:
+            raise torch.OutOfMemoryError(
+                f"{spec.param} needs {nbytes / 2**30:.0f} GiB, over device capacity {budget / 2**30:.0f} GiB"
+            )
         if floating:
             tensor = torch.randn(shape, generator=generator)
         else:
