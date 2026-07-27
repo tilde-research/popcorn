@@ -10,7 +10,7 @@ Each call resolves to one implementation in three steps:
    satisfy its declared shape, dtype, and value constraints.
 2. **Correctness.** Implementations with a recorded failure for this exact case are excluded.
    Selecting one that has no recorded pass emits `UnvalidatedWarning` once (see
-   [Validation](/docs/validation)).
+   [Validation](./validation.md)).
 3. **Speed.** Among the remaining candidates, the fastest wins, judged by the nearest recorded
    benchmark on the same device, dtype, and gradient mode. The reference competes on equal
    terms: when it measures fastest, it is selected. Without benchmark data, candidates are

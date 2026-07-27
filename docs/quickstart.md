@@ -18,10 +18,8 @@ A backend is eligible only when its package is installed at a declared supported
 auto-dispatch skips unavailable ones, and forcing one raises with the install hint or
 version error. First-party kernels (the `popcorn` backend) are always included.
 
-<Callout type="info">
-  You may be able to use `pip` to install Popcorn (with `pip install popcorn`) but this
-  path is not officially supported.
-</Callout>
+> **Note:** you may be able to use `pip` to install Popcorn (with `pip install popcorn`)
+> but this path is not officially supported.
 
 Update using `uv` with:
 
@@ -55,9 +53,7 @@ output = rms_norm(x, weight, backend="liger")
 
 ## Next steps
 
-<Cards>
-  <Card title="Dispatching" href="/docs/dispatching" description="How a call resolves to one implementation." />
-  <Card title="Validation" href="/docs/validation" description="Compare implementations against the reference." />
-  <Card title="Benchmarking" href="/docs/benchmarking" description="Record timings and route on data." />
-  <Card title="Kernel explorer" href="/kernels" description="Browse every kernel: math, backends, measured performance." />
-</Cards>
+- [Dispatching](./dispatching.md) — how a call resolves to one implementation
+- [Validation](./validation.md) — compare implementations against the reference
+- [Benchmarking](./benchmarking.md) — record timings and route on data
+- [Kernel explorer](https://tilde-research.github.io/popcorn/kernels/) — every kernel: math, backends, measured performance

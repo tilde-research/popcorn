@@ -40,4 +40,4 @@ logging.getLogger("popcorn.bench").setLevel(logging.INFO)
 
 To browse recorded rows instead, render the report database as HTML:
 `python -m popcorn.bench view --user` folds your local cache into the bundled reports. The
-same data powers the [kernel explorer](/kernels).
+same data powers the [kernel explorer](https://tilde-research.github.io/popcorn/kernels/).

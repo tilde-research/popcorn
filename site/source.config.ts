@@ -1,10 +1,10 @@
 import { defineConfig, defineDocs } from 'fumadocs-mdx/config';
 import { metaSchema, pageSchema } from 'fumadocs-core/source/schema';
 
-// You can customize Zod schemas for frontmatter and `meta.json` here
-// see https://fumadocs.dev/docs/mdx/collections
+// Docs content lives at the repo root (`docs/`) as plain markdown, readable on
+// GitHub as-is; the site is only a renderer for it.
 export const docs = defineDocs({
-  dir: 'content/docs',
+  dir: '../docs',
   docs: {
     schema: pageSchema,
     postprocess: {

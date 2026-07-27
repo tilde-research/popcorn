@@ -26,15 +26,13 @@ custom-op boundary. Tracing costs a few seconds per kernel on first `enable`, so
 `ops=` to what you use; `disable()` uninstalls the pass and keeps the patterns for a later
 `enable`.
 
-<Callout type="warn" title="A rewrite is not automatically a win">
-  For small memory-bound kernels (norms, glu blocks) inductor's fused codegen is often at
-  roofline and beats any dispatched backend, while the custom-op boundary blocks fusion into
-  neighboring ops — on an H100, a matched `rms_norm` train step measures 0.6–0.8x plain
-  inductor. The rewrite pays off when a backend holds an algorithmic advantage the compiler
-  cannot recover: matched `attn` routes to flash-attention and measures 1.4–2x plain
-  inductor, forward and training alike. Measure end to end, and prefer `enable(ops=[...])`
-  scoped to attention-class kernels.
-</Callout>
+> **A rewrite is not automatically a win.** For small memory-bound kernels (norms, glu
+> blocks) inductor's fused codegen is often at roofline and beats any dispatched backend,
+> while the custom-op boundary blocks fusion into neighboring ops — on an H100, a matched
+> `rms_norm` train step measures 0.6–0.8x plain inductor. The rewrite pays off when a
+> backend holds an algorithmic advantage the compiler cannot recover: matched `attn` routes
+> to flash-attention and measures 1.4–2x plain inductor, forward and training alike.
+> Measure end to end, and prefer `enable(ops=[...])` scoped to attention-class kernels.
 
 Two structural limits are worth knowing. References whose traced graph shape depends on the
 input — a python loop over sequence length, as in the linear-attention scans — can never

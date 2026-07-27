@@ -12,12 +12,6 @@ suite, so speed never comes at the cost of correctness.
 Popcorn also ships a growing collection of first-party kernels, along with the environment
 and harness to build, test, benchmark, and deploy new kernels and backends.
 
-<Cards>
-  <Card title="Quick start" href="/docs/quickstart" description="Install and dispatch your first kernel." />
-  <Card title="Kernel explorer" href="/kernels" description="Browse every kernel: math, backends, and measured performance." />
-  <Card title="Contributing" href="https://github.com/tilde-research/popcorn/blob/main/CONTRIBUTING.md" description="Add kernels and backends." />
-</Cards>
-
 ## Terminology
 
 Some frequently used terms are overloaded; Popcorn uses them precisely:
@@ -32,10 +26,13 @@ Some frequently used terms are overloaded; Popcorn uses them precisely:
 
 ## Guides
 
-- [Quick start](/docs/quickstart) — install and call your first kernel
-- [Dispatching](/docs/dispatching) — how a call resolves to one implementation
-- [Registration](/docs/registration) — define kernels and bind implementations
-- [Validation](/docs/validation) — compare implementations against the reference
-- [Benchmarking](/docs/benchmarking) — record timings and route on data
-- [Tuning](/docs/tuning) — select one implementation for a region of shapes
-- [torch.compile](/docs/torch-compile) — route compiled models through Popcorn
+- [Quick start](./quickstart.md) — install and call your first kernel
+- [Dispatching](./dispatching.md) — how a call resolves to one implementation
+- [Registration](./registration.md) — define kernels and bind implementations
+- [Validation](./validation.md) — compare implementations against the reference
+- [Benchmarking](./benchmarking.md) — record timings and route on data
+- [Tuning](./tuning.md) — select one implementation for a region of shapes
+- [torch.compile](./torch-compile.md) — route compiled models through Popcorn
+
+Kernel cards with math, backends, and measured performance live in the
+[kernel explorer](https://tilde-research.github.io/popcorn/kernels/).

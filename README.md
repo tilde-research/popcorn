@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/kernels-96-blue" alt="kernels"/>
   <img src="https://img.shields.io/badge/backends-8-blue" alt="backends"/>
   <img src="https://img.shields.io/badge/implementations-128-blue" alt="implementations"/>
-  <img src="https://img.shields.io/badge/grid%20rows-31%2C099-blue" alt="grid rows"/>
+  <img src="https://img.shields.io/badge/grid%20rows-31%2C176-blue" alt="grid rows"/>
 </p>
 <!-- /popcorn:badges -->
 
