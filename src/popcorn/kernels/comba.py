@@ -60,3 +60,9 @@ def comba_fla(
     softmax_scale,
 ):
     return kernel(q, k, v, p, g, beta=beta, scale=softmax_scale)[0]
+
+
+# fused_recurrent_comba takes p before v, unlike chunk_comba.
+@comba.register("fla:recurrent", source="fla.ops.comba.fused_recurrent_comba", forward_only=True)
+def comba_fla_recurrent(q, k, v, p, g, beta, softmax_scale):
+    return kernel(q, k, p, v, g, beta=beta, scale=softmax_scale)[0]

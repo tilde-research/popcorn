@@ -45,3 +45,8 @@ def delta_rule(
 @delta_rule.register("fla", source="fla.ops.delta_rule.chunk_delta_rule")
 def delta_rule_fla(q: BFloat16[Tensor, "batch seq heads key_dim"], k, v, beta, softmax_scale):
     return kernel(q, k, v, beta, scale=softmax_scale)[0]
+
+
+@delta_rule.register("fla:recurrent", source="fla.ops.delta_rule.fused_recurrent_delta_rule", forward_only=True)
+def delta_rule_fla_recurrent(q, k, v, beta, softmax_scale):
+    return kernel(q, k, v, beta, scale=softmax_scale)[0]

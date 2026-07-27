@@ -1047,6 +1047,21 @@ class TestForwardOnly:
             op(x, backend="fwd")
         assert "fwd-only" in repr(op)
 
+    def test_recorded_winner_still_falls_through_under_grad(self, tmp_path, monkeypatch):
+        from popcorn.bench import store
+
+        monkeypatch.setattr(store, "BUNDLED_REPORTS", tmp_path)
+        monkeypatch.setenv("POPCORN_CACHE_DIR", str(tmp_path / "cache"))
+        op = make_op()
+        op.register("fwd", forward_only=True)(lambda x, weight, flag: x - 1)
+        x = torch.zeros(2, 4)
+        write(
+            [Record.from_dict(_exact_pass_row(op, x, "fwd", bench={"fwd_ms": 0.001, "ref_fwd_ms": 1.0}))],
+            tmp_path,
+        )
+        assert torch.equal(op(x), -torch.ones_like(x))  # no grad: the recorded winner serves the call
+        assert torch.equal(op(x.clone().requires_grad_()), torch.ones_like(x))  # grad: torch, despite the row
+
 
 class TestTorchOp:
     def setup_method(self):

@@ -34,3 +34,8 @@ def hgrn(
 @hgrn.register("fla", source="fla.ops.hgrn.chunk_hgrn")
 def hgrn_fla(x, g):
     return kernel(x, g)[0]
+
+
+@hgrn.register("fla:recurrent", source="fla.ops.hgrn.fused_recurrent_hgrn", forward_only=True)
+def hgrn_fla_recurrent(x, g):
+    return kernel(x, g)[0]

@@ -53,3 +53,8 @@ def kda_fla(
     softmax_scale,
 ):
     return kernel(q, k, v, g, beta, scale=softmax_scale)[0]
+
+
+@kda.register("fla:recurrent", source="fla.ops.kda.fused_recurrent_kda", forward_only=True)
+def kda_fla_recurrent(q, k, v, g, beta, softmax_scale):
+    return kernel(q, k, v, g, beta, scale=softmax_scale)[0]

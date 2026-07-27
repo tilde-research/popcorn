@@ -42,3 +42,8 @@ def rwkv6(
 @rwkv6.register("fla", source="fla.ops.rwkv6.chunk_rwkv6")
 def rwkv6_fla(r, k, v, w, u, softmax_scale):
     return kernel(r, k, v, w, u, scale=softmax_scale)[0]
+
+
+@rwkv6.register("fla:recurrent", source="fla.ops.rwkv6.fused_recurrent_rwkv6", forward_only=True)
+def rwkv6_fla_recurrent(r, k, v, w, u, softmax_scale):
+    return kernel(r, k, v, w, u, scale=softmax_scale)[0]

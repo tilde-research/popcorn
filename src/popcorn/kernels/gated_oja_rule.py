@@ -49,3 +49,18 @@ def gated_oja_rule(
 @gated_oja_rule.register("fla", source="fla.ops.gated_oja_rule.chunk_gated_oja_rule")
 def gated_oja_rule_fla(q, k, v, gv, beta, softmax_scale):
     return kernel(q, k, v, gv, beta, scale=softmax_scale)[0]
+
+
+def _recurrent_supported(**arguments):
+    """The fused recurrent kernel asserts value_dim <= 128."""
+    return arguments["v"].shape[-1] <= 128
+
+
+@gated_oja_rule.register(
+    "fla:recurrent",
+    source="fla.ops.gated_oja_rule.fused_recurrent_gated_oja_rule",
+    predicate=_recurrent_supported,
+    forward_only=True,
+)
+def gated_oja_rule_fla_recurrent(q, k, v, gv, beta, softmax_scale):
+    return kernel(q, k, v, gv, beta, scale=softmax_scale)[0]

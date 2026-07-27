@@ -95,7 +95,7 @@ def rms_norm(
 - `name`: op name, defaults to the function name
 - `tags`: a set of `Tag` members classifying the op; most kernels wear several
 
-The reference is the contract: jaxtyping annotations on every tensor and return, plain or `Literal` annotations on scalars (default value first), every default declared here, differentiable, and half precision upcast for reductions. Single-tensor returns also get a `torch.ops.popcorn` binding. No branching on backends or devices. Dim pools come from `popcorn/core/dims.py` (`DIMS`); `test_args` only grids scalars. Runtime shape validity comes from report rows / fitted regions, not per-op declarations.
+The reference is the contract: jaxtyping annotations on every tensor and return, plain or `Literal` annotations on scalars (default value first), every default declared here, differentiable, and half precision upcast for reductions. Single-tensor returns also get a `torch.ops.popcorn` binding. No branching on backends or devices. Differentiable is unconditional: never guard the reference with grad checks or raises — an implementation without a backward is a backend registered `forward_only=True` (see [3](#3-bind-a-kernel-from-a-declared-library)), and the reference is what autograd calls fall back to. Dim pools come from `popcorn/core/dims.py` (`DIMS`); `test_args` only grids scalars. Runtime shape validity comes from report rows / fitted regions, not per-op declarations.
 
 ### The docstring
 
@@ -124,7 +124,7 @@ All tags live in `src/popcorn/core/tags.py` — read it before tagging, and add 
 - `name`: backend name
 - `source`: dotted path to the external kernel, imported lazily on first dispatch; trailing segments may be attributes (`unsloth.kernels.layernorm.Fast_Layernorm.apply`), and a module path serves its members through `kernel` attributes (`kernel.matmul`); alone it must match the reference signature exactly
 - `predicate`: `f(**args) -> bool` veto, last resort (poison-avoidance, not shape ranges)
-- `forward_only`: `True` for kernels without a backward; they decline autograd calls and the harness grades them forward-only
+- `forward_only`: `True` for kernels without a usable backward, including decode/inference-oriented implementations — a step-wise decode kernel registers on the op it computes (fla's `fused_recurrent_*` forms are `fla:recurrent` on the same op as `chunk_*`), never as a separate `*_decode` op. The dispatcher considers a forward-only backend only when no gradient can flow (grad disabled, or no input requires grad); otherwise the call falls through to the remaining backends and the torch reference. The harness grades them forward-only
 
 Shape validity is learned from report rows (`python -m popcorn.bench map`), not declared. Dim probe pools live only in `DIMS` (`popcorn/core/dims.py`); the fitter turns pass/fail/oom labels into regions. Scalar kwargs are classified once in `popcorn/core/args.py` (`SPEED_ARGS` vs `NEUTRAL_ARGS`): discrete values exact-match in the validity stratum, floats fit as `Real` bands like dims, and only `SPEED_ARGS` participate in timing nearest-neighbor.
 

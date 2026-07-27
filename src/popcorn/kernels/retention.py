@@ -38,3 +38,8 @@ def retention(
 @retention.register("fla", source="fla.ops.retention.chunk_retention")
 def retention_fla(q, k, v, softmax_scale):
     return kernel(q, k, v, scale=softmax_scale)[0]
+
+
+@retention.register("fla:recurrent", source="fla.ops.retention.fused_recurrent_retention", forward_only=True)
+def retention_fla_recurrent(q, k, v, softmax_scale):
+    return kernel(q, k, v, scale=softmax_scale)[0]

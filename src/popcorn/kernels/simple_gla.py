@@ -35,3 +35,8 @@ def simple_gla(
 @simple_gla.register("fla", source="fla.ops.simple_gla.chunk_simple_gla")
 def simple_gla_fla(q, k, v, g, softmax_scale):
     return kernel(q, k, v, g, scale=softmax_scale)[0]
+
+
+@simple_gla.register("fla:recurrent", source="fla.ops.simple_gla.fused_recurrent_simple_gla", forward_only=True)
+def simple_gla_fla_recurrent(q, k, v, g, softmax_scale):
+    return kernel(q, k, v, g, scale=softmax_scale)[0]

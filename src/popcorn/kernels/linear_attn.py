@@ -48,3 +48,8 @@ def _supported(**arguments):
 @linear_attn.register("fla", source="fla.ops.linear_attn.chunk_linear_attn", predicate=_supported)
 def linear_attn_fla(q, k, v, normalize, softmax_scale):
     return kernel(q, k, v, scale=softmax_scale, normalize=normalize)[0]
+
+
+@linear_attn.register("fla:recurrent", source="fla.ops.linear_attn.fused_recurrent_linear_attn", forward_only=True)
+def linear_attn_fla_recurrent(q, k, v, normalize, softmax_scale):
+    return kernel(q, k, v, scale=softmax_scale, normalize=normalize)[0]

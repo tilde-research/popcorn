@@ -375,7 +375,9 @@ Ops we looked at and did not port, and why.
 - quack `gemm`/`linear`/`mlp` family: training-graph fusion APIs that store
   and reconsume pre-activations (`fuse_grad_accum`, `store_preact`); no
   stateless functional contract to adapt, and bare gemm is cuBLAS territory.
-- fla `fused_recurrent_*`/`fused_chunk_*`/`parallel_*` variants of ops we
-  already serve via `chunk_*`: not blocked, just not registered yet; they
-  would slot in as `fla:recurrent`-style backends and multiply the benchmark
-  grid, so they wait until tuned dispatch earns it.
+- fla `fused_chunk_*`/`parallel_*` variants of ops we already serve via
+  `chunk_*`: not blocked, just not registered yet; they would slot in as
+  additional `fla:*` backends and multiply the benchmark grid, so they wait
+  until tuned dispatch earns it. (The `fused_recurrent_*` variants are
+  registered as `fla:recurrent`, forward-only: step-wise kernels for the
+  decode regime, so autograd calls route to `chunk_*`/torch instead.)
