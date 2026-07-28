@@ -1,7 +1,7 @@
 # Agent guidance
 
 Popcorn welcomes focused contributions made with coding agents.
-[CONTRIBUTING.md](CONTRIBUTING.md) is the source of truth for setup and the complete kernel/backend workflow.
+[CONTRIBUTING.md](CONTRIBUTING.md) is the source of truth for setup and the complete kernel/implementation workflow.
 This file contains only the shortest safe path to a reviewable change.
 
 ## Start here
@@ -16,22 +16,25 @@ failure before adding features; do not silently alter pins or bypass registratio
 
 ## Repository map
 
-- `src/popcorn/kernels/<op>.py`: PyTorch reference and backend adapters.
+- `src/popcorn/kernels/<op>.py`: PyTorch reference and implementation adapters.
 - `src/popcorn/impls/`: first-party Triton and CUDA implementations.
 - `src/popcorn/core/`: registration, dispatch, constraints, and backend loading.
 - `src/popcorn/bench/`: correctness, benchmarking, fitting, and report tooling.
 - `src/popcorn/reports/*.jsonl`: generated evidence used by dispatch.
 - `tests/`: convention, CPU, and GPU-gated tests.
+- `scripts/`: one owner per generated artifact — `bench_hardware.py` writes report rows,
+  `update_readme.py` the README badge block, `update_site.py` `site/public/data`. No script
+  writes another's output, and `docs/` has a single copy that the site renders in place.
 
 ## Non-negotiable rules
 
 - The PyTorch reference defines semantics. Do not weaken it, tolerances, test inputs, or the harness.
 - Reuse established patterns before adding an abstraction, dimension, tag, dependency, or public option.
-- Backend adapters map arguments only and load optional libraries lazily through `source=`.
+- Implementation adapters map arguments only and load optional libraries lazily through `source=`.
 - Shape validity comes from benchmark reports. Do not use removed `supports=` or `test_shapes=` arguments.
 - Express dtype/value restrictions with narrowed annotations; use predicates only for runtime poison avoidance.
 - Never hide a fallback, swallow an error, truncate inputs, or claim validation that was not run.
-- Never hand-edit report JSONL or generated README badges; use the benchmark and update scripts.
+- Never hand-edit report JSONL or generated README badges; use the owning script above.
 - Adapted code requires a license-compatible MIT/BSD/Apache source and a provenance header.
 - Ask before changing dependencies, public signatures, dispatch policy, CI, or release configuration.
 - Do not commit or push unless explicitly requested.
@@ -44,10 +47,10 @@ Start with the narrowest relevant test, then run the applicable handoff checks:
 uv run pytest tests -q
 uv run pyright
 scripts/format.sh
-uv run python -m popcorn.bench run <op> --backend <name>
+uv run python -m popcorn.bench run <op> --impl <name>
 ```
 
-Kernel/backend changes require the full relevant hardware grid with zero `fail`, `crash`, `error`,
+Kernel/implementation changes require the full relevant hardware grid with zero `fail`, `crash`, `error`,
 or `bench_error` rows before performance claims. Record GPU, driver, CUDA/ROCm, Torch, Python,
 backend version, dtype, shapes, gradient mode, and commands. State clearly when GPU checks were not run.
 

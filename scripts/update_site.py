@@ -1,9 +1,14 @@
-"""Export kernel cards and slimmed benchmark rows as JSON for the docs site.
+"""Owns site/public/data. Nothing else writes it.
 
-Writes site/public/data/index.json (card grid + search) and one
-<kernel>.json per op (card page + plots). Run from the repo root:
+Exports kernel cards and slimmed benchmark rows as JSON for the docs site:
+index.json (card grid + search) and one <kernel>.json per op (card page + plots).
+The output is generated, gitignored, and rebuilt by the Site workflow on every
+deploy; run this locally when the explorer must reflect new report rows.
 
-    python scripts/export_site_data.py [--out site/public/data]
+Docs markdown is not copied here -- the site reads `docs/` in place. Badges are
+update_readme.py's job. Run from the repo root:
+
+    python scripts/update_site.py [--out site/public/data]
 """
 
 import argparse
@@ -50,15 +55,15 @@ def errors(record) -> dict:
 
 
 def rows(name: str) -> list[dict]:
-    """Newest benchmarked row per (backend, device, case, grad), slimmed to plot fields."""
+    """Newest benchmarked row per (impl, device, case, grad), slimmed to plot fields."""
     latest = {}
     for record in read_file(BUNDLED_REPORTS / f"{name}.jsonl"):
-        key = (record.backend, record.environment.device, record.case_id, record.result.grad)
+        key = (record.impl, record.environment.device, record.case_id, record.result.grad)
         if key not in latest or record.environment.ts > latest[key].environment.ts:
             latest[key] = record
     slim = [
         {
-            "backend": record.backend,
+            "impl": record.impl,
             "device": record.environment.device,
             "dtype": record.config["dtype"],
             "grad": record.result.grad,
@@ -83,15 +88,34 @@ def card(op) -> dict:
             {"name": p.name} | ({} if p.default is inspect.Parameter.empty else {"default": repr(p.default)})
             for p in inspect.signature(op.reference).parameters.values()
         ],
-        "backends": [
+        "impls": [
             {
                 "name": b.name,
                 "source": b.source,
                 "forward_only": b.forward_only,
             }
-            for b in op._backends
+            for b in op._impls
         ],
     }
+
+
+def payloads() -> dict[str, str]:
+    """Every file the site consumes, keyed by filename: one card per kernel plus the index."""
+    files, index = {}, []
+    for name, op in sorted(KERNELS.items()):
+        data = card(op) | {"rows": rows(name)}
+        files[f"{name}.json"] = json.dumps(data, separators=(",", ":"))
+        index.append(
+            {
+                "name": name,
+                "summary": op.summary,
+                "tags": sorted(op.tags),
+                "impls": [b.name for b in op._impls],
+                "rows": len(data["rows"]),
+            }
+        )
+    files["index.json"] = json.dumps(index, separators=(",", ":"))
+    return files
 
 
 def main() -> None:
@@ -100,21 +124,10 @@ def main() -> None:
     out = parser.parse_args().out
     out.mkdir(parents=True, exist_ok=True)
 
-    index = []
-    for name, op in sorted(KERNELS.items()):
-        data = card(op) | {"rows": rows(name)}
-        (out / f"{name}.json").write_text(json.dumps(data, separators=(",", ":")))
-        index.append(
-            {
-                "name": name,
-                "summary": op.summary,
-                "tags": sorted(op.tags),
-                "backends": [b.name for b in op._backends],
-                "rows": len(data["rows"]),
-            }
-        )
-    (out / "index.json").write_text(json.dumps(index, separators=(",", ":")))
-    print(f"{len(index)} kernels -> {out}")
+    files = payloads()
+    for name, text in files.items():
+        (out / name).write_text(text)
+    print(f"{len(files) - 1} kernels -> {out}")
 
 
 if __name__ == "__main__":

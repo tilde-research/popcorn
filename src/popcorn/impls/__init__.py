@@ -1,4 +1,4 @@
-"""First-party kernels, registered as the `popcorn` backend.
+"""First-party kernels, registered as the `popcorn` implementation.
 
 One module per op, named after it. Each module exposes a callable named
 exactly like the op with the reference signature (autograd handled inside),

@@ -6,7 +6,7 @@ import { gitConfig } from '@/lib/shared';
 
 const STATS = [
   { value: '96', label: 'kernels' },
-  { value: '8', label: 'backends' },
+  { value: '6', label: 'backends' },
   { value: '128', label: 'implementations' },
 ] as const;
 

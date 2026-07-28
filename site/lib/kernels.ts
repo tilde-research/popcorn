@@ -2,18 +2,18 @@ export interface KernelIndexEntry {
   name: string;
   summary: string | null;
   tags: string[];
-  backends: string[];
+  impls: string[];
   rows: number;
 }
 
-export interface KernelBackend {
+export interface KernelImpl {
   name: string;
   source: string | null;
   forward_only: boolean;
 }
 
 export interface KernelRow {
-  backend: string;
+  impl: string;
   device: string;
   dtype: string;
   grad: boolean;
@@ -46,7 +46,7 @@ export interface Kernel {
   citations: { label: string; url: string }[];
   tags: string[];
   params: { name: string; default?: string }[];
-  backends: KernelBackend[];
+  impls: KernelImpl[];
   rows: KernelRow[];
 }
 

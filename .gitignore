@@ -11,3 +11,4 @@ logs/
 **/reports/shards/
 **/reports/index.html
 *.jsonl.lock
+TODO.md

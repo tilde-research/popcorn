@@ -50,13 +50,14 @@ python -m popcorn.bench.loop try rms_norm --cases 4 --reps 5 --vs liger --tag ex
 - **Verdict.** `KEEP` (exit 0) requires every case to pass and the summed time to beat
   the best previously kept row by at least 1%; the first passing run sets the baseline.
   Anything else is `REVERT` (exit 1) with the reason.
-- **Incumbent context.** `--vs <backend>` also times a registered backend on the same
+- **Incumbent context.** `--vs <impl>` also times a registered implementation on the same
   inputs, as an advisory column — the number to beat before promotion is worth it.
 - `--forward-only` skips backward grading and timing for inference-oriented kernels.
 
 Every run appends one JSON line — timestamp, tag, note, per-case results, totals,
 verdict, and a fingerprint of the candidate code — to
-`${POPCORN_CACHE_DIR:-~/.cache/popcorn}/v2/loop/<op>.jsonl` (override with `--log`).
+`${POPCORN_CACHE_DIR:-~/.cache/popcorn}/v<schema>/loop/<op>.jsonl` (override with `--log`),
+where `<schema>` is the current report schema version.
 The log is an untracked scratchpad; never commit it.
 
 ## targets
@@ -70,15 +71,15 @@ rows:
 
 | column | meaning |
 | --- | --- |
-| `recorded backends` | non-torch backends with any recorded row |
+| `recorded impls` | non-torch implementations with any recorded row |
 | `tested` | distinct (case, gradient mode) pairs with records |
-| `pass%` | share of tested pairs some backend passes |
+| `pass%` | share of tested pairs some implementation passes |
 | `grad%` | same, restricted to gradient-mode pairs |
-| `x best` | median over cases of the best backend's speedup vs the reference |
-| `reg` | registered non-torch backends |
+| `x best` | median over cases of the best implementation's speedup vs the reference |
+| `reg` | registered non-torch implementations |
 
 Ops with no rows, speedups near 1x, or low `grad%` (forward-only incumbents) are the
-prime targets. `ISSUES.md` adds context on why a backend is gated.
+prime targets. `ISSUES.md` adds context on why an implementation is gated.
 
 ## status
 

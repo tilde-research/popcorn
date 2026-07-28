@@ -79,10 +79,10 @@ button { cursor: pointer; }
 <div class="matrix-wrap"><table id="matrix"></table></div>
 
 <h2>Cases</h2>
-<div class="note">&#9889; fastest measured backend for that exact case (and faster than torch)</div>
+<div class="note">&#9889; fastest measured impl for that exact case (and faster than torch)</div>
 <div id="controls">
   <select id="f-op"></select>
-  <select id="f-backend"></select>
+  <select id="f-impl"></select>
   <select id="f-dtype"></select>
   <select id="f-status"></select>
   <input id="f-search" placeholder="search case / reason" type="search">
@@ -91,7 +91,7 @@ button { cursor: pointer; }
 </div>
 <div class="table-wrap"><table id="cases">
   <thead><tr>
-    <th data-k="status">status</th><th data-k="op">op</th><th data-k="backend">backend</th>
+    <th data-k="status">status</th><th data-k="op">op</th><th data-k="impl">impl</th>
     <th data-k="dtype">dtype</th><th data-k="case">case</th>
     <th data-k="fwd" class="num">fwd err/scale</th><th data-k="bwd" class="num">bwd err/scale</th>
     <th data-k="sf" class="num">fwd &times;</th><th data-k="sb" class="num">bwd &times;</th>
@@ -119,32 +119,32 @@ const memx = r => {
   return mem ? ref / mem : null;
 };
 const ROWS = DATA.map(r => ({
-  r, op: r.op, backend: r.backend, status: r.status, dtype: r.config.dtype,
+  r, op: r.op, impl: r.impl, status: r.status, dtype: r.config.dtype,
   case: r.case, reason: r.reason || (r.bench_error ? "benchmark: " + r.bench_error : ""),
   fwd: relerr(r.fwd), bwd: relerr(r.bwd),
   sf: speed(r, "fwd"), sb: speed(r, "bwd"), mem: memx(r),
 }));
 
-// Fastest backend per case: lowest measured fwd time, but only a win when it
+// Fastest impl per case: lowest measured fwd time, but only a win when it
 // also beats the torch reference (speedup > 1); otherwise torch is fastest.
 const CHAMPION = {};
 ROWS.forEach(v => {
   if (!v.r.bench || !v.r.bench.fwd_ms) return;
   const key = v.op + "|" + v.r.device + "|" + v.r.case_id;
   if (!CHAMPION[key] || v.r.bench.fwd_ms < CHAMPION[key].ms)
-    CHAMPION[key] = {backend: v.backend, ms: v.r.bench.fwd_ms, wins: v.sf > 1};
+    CHAMPION[key] = {impl: v.impl, ms: v.r.bench.fwd_ms, wins: v.sf > 1};
 });
 ROWS.forEach(v => {
   const c = CHAMPION[v.op + "|" + v.r.device + "|" + v.r.case_id];
-  v.fastest = !!c && c.wins && c.backend === v.backend;
+  v.fastest = !!c && c.wins && c.impl === v.impl;
 });
 
-// Case wins per op: the champion backend when it beats torch, torch otherwise.
+// Case wins per op: the champion impl when it beats torch, torch otherwise.
 const WINS = {}, MEASURED = {};
 Object.entries(CHAMPION).forEach(([key, c]) => {
   const op = key.split("|", 1)[0];
   MEASURED[op] = (MEASURED[op] || 0) + 1;
-  const winner = op + "|" + (c.wins ? c.backend : "torch");
+  const winner = op + "|" + (c.wins ? c.impl : "torch");
   WINS[winner] = (WINS[winner] || 0) + 1;
 });
 
@@ -159,7 +159,7 @@ const fmt = (x, d) => x == null ? "-" : x.toExponential ? x.toExponential(1) : x
 const fx = x => x == null ? "-" : `<span class="${x >= 1 ? "good" : "bad"}">${x.toFixed(2)}&times;</span>`;
 const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 
-const filters = {op: "", backend: "", dtype: "", status: "", search: ""};
+const filters = {op: "", impl: "", dtype: "", status: "", search: ""};
 let sortKey = null, sortDir = 1;
 
 function fillSelect(id, key, label) {
@@ -171,35 +171,35 @@ function fillSelect(id, key, label) {
 function renderMeta() {
   const devices = [...new Set(DATA.map(r => r.device))].join(", ");
   const latest = DATA.map(r => r.ts).sort().at(-1);
-  $("#meta").textContent = `${DATA.length} case-backend rows on ${devices}` +
+  $("#meta").textContent = `${DATA.length} case-impl rows on ${devices}` +
     ` \u00b7 torch ${DATA[0].torch} \u00b7 latest run ${latest}`;
 }
 
 function renderMatrix() {
-  const ops = uniq("op"), backends = uniq("backend");
-  const head = `<thead><tr><th>kernel</th><th>torch</th>${backends.map(b => `<th>${b}</th>`).join("")}</tr></thead>`;
+  const ops = uniq("op"), impls = uniq("impl");
+  const head = `<thead><tr><th>kernel</th><th>torch</th>${impls.map(b => `<th>${b}</th>`).join("")}</tr></thead>`;
   const body = ops.map(op => {
     const win = b => {
       const w = WINS[op + "|" + b] || 0;
       return {cls: w ? " fastest" : "", t: w ? ` title="fastest on ${w} of ${MEASURED[op]} measured cases"` : ""};
     };
-    const cells = backends.map(b => {
-      const group = ROWS.filter(v => v.op === op && v.backend === b);
+    const cells = impls.map(b => {
+      const group = ROWS.filter(v => v.op === op && v.impl === b);
       const passed = group.filter(v => v.status === "pass").length;
       const mark = !passed ? "&#10008;" : passed === group.length ? "&#10004;" : "&#10004;*";
       const med = median(group.filter(v => v.sf != null).map(v => v.sf));
       const x = med != null ? ` <span class="dim">${med.toFixed(2)}&times;</span>` : "";
       const w = win(b);
       return `<td class="cell ${!passed ? "fail" : "good"}${w.cls}"${w.t}` +
-        ` data-op="${op}" data-backend="${b}">${group.length ? mark + x : "&#10008;"}</td>`;
+        ` data-op="${op}" data-impl="${b}">${group.length ? mark + x : "&#10008;"}</td>`;
     }).join("");
     const w = win("torch");
     return `<tr><td>${op}</td><td class="good${w.cls}"${w.t}>&#10004;</td>${cells}</tr>`;
   }).join("");
   $("#matrix").innerHTML = head + `<tbody>${body}</tbody>`;
   document.querySelectorAll("#matrix td.cell").forEach(td => td.onclick = () => {
-    filters.op = td.dataset.op; filters.backend = td.dataset.backend;
-    $("#f-op").value = filters.op; $("#f-backend").value = filters.backend;
+    filters.op = td.dataset.op; filters.impl = td.dataset.impl;
+    $("#f-op").value = filters.op; $("#f-impl").value = filters.impl;
     renderTable();
     $("#cases").scrollIntoView({behavior: "smooth"});
   });
@@ -208,7 +208,7 @@ function renderMatrix() {
 function filtered() {
   const q = filters.search.toLowerCase();
   let rows = ROWS.filter(v =>
-    (!filters.op || v.op === filters.op) && (!filters.backend || v.backend === filters.backend) &&
+    (!filters.op || v.op === filters.op) && (!filters.impl || v.impl === filters.impl) &&
     (!filters.dtype || v.dtype === filters.dtype) && (!filters.status || v.status === filters.status) &&
     (!q || (v.op + " " + v.case + " " + v.reason).toLowerCase().includes(q)));
   const key = sortKey || "severity";
@@ -237,7 +237,7 @@ function detailRow(r) {
       <th class="num">scale</th><th class="num">err/scale</th></tr></thead>
       <tbody>${gauges("fwd")}${gauges("bwd")}</tbody></table></div>
     ${bench ? `<div><table><thead><tr><th>bench</th><th class="num"></th></tr></thead><tbody>${bench}</tbody></table></div>` : ""}
-    <div class="dim">case_id ${r.case_id} &middot; ${r.backend} ${r.backend_version || ""} &middot; ${r.ts}
+    <div class="dim">case_id ${r.case_id} &middot; ${r.impl} ${r.backend_version || ""} &middot; ${r.ts}
       ${reason ? `<br>${esc(reason)}` : ""}</div>
   </div>`;
 }
@@ -251,7 +251,7 @@ function renderTable() {
   $("#cases tbody").innerHTML = rows.slice(0, cap).map((v, i) => `
     <tr class="case" data-i="${i}">
       <td><span class="pill ${v.status}">${v.status}</span></td>
-      <td>${v.op}</td><td>${v.backend}</td><td>${v.dtype}</td><td>${esc(v.case)}</td>
+      <td>${v.op}</td><td>${v.impl}</td><td>${v.dtype}</td><td>${esc(v.case)}</td>
       <td class="num">${fmt(v.fwd)}</td><td class="num">${fmt(v.bwd)}</td>
       <td class="num">${v.fastest ? "&#9889; " : ""}${fx(v.sf)}</td><td class="num">${fx(v.sb)}</td><td class="num">${fx(v.mem)}</td>
       <td class="reason" title="${esc(v.reason)}">${esc(v.reason)}</td>
@@ -268,7 +268,7 @@ function renderTable() {
 }
 
 fillSelect("#f-op", "op", "op");
-fillSelect("#f-backend", "backend", "backend");
+fillSelect("#f-impl", "impl", "impl");
 fillSelect("#f-dtype", "dtype", "dtype");
 fillSelect("#f-status", "status", "status");
 $("#f-search").oninput = e => { filters.search = e.target.value; renderTable(); };

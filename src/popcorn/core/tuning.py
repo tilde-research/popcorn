@@ -1,4 +1,4 @@
-"""Backend selection from recorded validation and benchmark data."""
+"""Implementation selection from recorded validation and benchmark data."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from popcorn.core.sources import installed_version
 from popcorn.core.spaces import contains
 
 if TYPE_CHECKING:
-    from popcorn.core.dispatcher import Backend, Dispatcher
+    from popcorn.core.dispatcher import Dispatcher, Implementation
 
 
 def _key(value: Any) -> Any:
@@ -43,7 +43,7 @@ def _key(value: Any) -> Any:
 class Sample:
     """One usable benchmark row: its case coordinates and measured timings."""
 
-    backend: str
+    impl: str
     device: str
     grad: bool
     dims: dict[str, int]
@@ -62,7 +62,7 @@ class Sample:
 
 
 class Tuner:
-    """Selection only: reads recorded results and picks backends, never runs or writes benchmarks.
+    """Selection only: reads recorded results and picks implementations, never runs or writes benchmarks.
 
     Ranking / admission live on `policy` — replace it to reconfigure behavior.
     """
@@ -71,7 +71,7 @@ class Tuner:
         self.op = op
         self.store = store or Store()
         self.policy = policy or Policy()
-        self._selected: dict[Any, Backend] = {}
+        self._selected: dict[Any, Implementation] = {}
         self._lock = RLock()
 
     @cached_property
@@ -88,9 +88,9 @@ class Tuner:
                 result.status == "pass"
                 and result.benchmarked
                 and environment.torch == torch.__version__
-                and environment.backend_version == installed_version(record.backend)
+                and environment.backend_version == installed_version(record.impl)
                 and matching(self.op.fingerprint, environment.ref_hash)
-                and matching(self._expected(record.backend), environment.impl_hash)
+                and matching(self._expected(record.impl), environment.impl_hash)
                 and config
                 and bench.get("fwd_ms")
                 and bench.get("ref_fwd_ms")
@@ -98,7 +98,7 @@ class Tuner:
             if usable:
                 samples.append(
                     Sample(
-                        record.backend,
+                        record.impl,
                         environment.device,
                         result.grad,
                         config["dims"],
@@ -121,9 +121,9 @@ class Tuner:
             record
             for record in self.rows
             if record.environment.torch == torch.__version__
-            and record.environment.backend_version == installed_version(record.backend)
+            and record.environment.backend_version == installed_version(record.impl)
             and matching(self.op.fingerprint, record.environment.ref_hash)
-            and matching(self._expected(record.backend), record.environment.impl_hash)
+            and matching(self._expected(record.impl), record.environment.impl_hash)
         ]
         return fit(current, self.op._dims)
 
@@ -132,38 +132,38 @@ class Tuner:
         return self.op.name
 
     def _expected(self, name: str) -> str | None:
-        backend = next((candidate for candidate in self.op._backends if candidate.name == name), None)
-        return backend.fingerprint if backend else None
+        impl = next((candidate for candidate in self.op._impls if candidate.name == name), None)
+        return impl.fingerprint if impl else None
 
-    def exact(self, backend: Backend, call: Call) -> Record | None:
+    def exact(self, impl: Implementation, call: Call) -> Record | None:
         return self.store.exact(
             self.op.name,
-            backend.name,
+            impl.name,
             call,
             torch.__version__,
-            installed_version(backend.name),
+            installed_version(impl.name),
             self.rows,
             ref_hash=self.op.fingerprint,
-            impl_hash=backend.fingerprint,
+            impl_hash=impl.fingerprint,
         )
 
-    def region_for(self, backend: Backend, call: Call) -> Region | None:
-        return region_for(self.regions, backend.name, call.device_name, call.grad, call.config)
+    def region_for(self, impl: Implementation, call: Call) -> Region | None:
+        return region_for(self.regions, impl.name, call.device_name, call.grad, call.config)
 
-    def mapped(self, backend: str) -> bool:
-        return any(key[0] == backend for key in self.regions)
+    def mapped(self, impl: str) -> bool:
+        return any(key[0] == impl for key in self.regions)
 
     def select(
         self,
         call: Call | None,
-        candidates: Sequence[Backend],
+        candidates: Sequence[Implementation],
         forced: str | None = None,
         signature: Any = None,
         policy: Policy | None = None,
-    ) -> Backend:
+    ) -> Implementation:
         active = policy or self.policy
         with self._lock:
-            key = (_key(signature), tuple(backend.name for backend in candidates), forced, active)
+            key = (_key(signature), tuple(impl.name for impl in candidates), forced, active)
             if key not in self._selected:
                 self._selected[key] = self._select(call, candidates, forced, active)
             return self._selected[key]
@@ -171,16 +171,16 @@ class Tuner:
     def _select(
         self,
         call: Call | None,
-        candidates: Sequence[Backend],
+        candidates: Sequence[Implementation],
         forced: str | None,
         policy: Policy,
-    ) -> Backend:
-        eligible = [backend for backend in candidates if not policy.blocked(backend, call, forced, self)]
+    ) -> Implementation:
+        eligible = [impl for impl in candidates if not policy.blocked(impl, call, forced, self)]
         if not eligible:
-            raise DispatchError(f"{self.op.name}: no backend is eligible")
+            raise DispatchError(f"{self.op.name}: no implementation is eligible")
         return policy.choose(eligible, call, forced, self) or eligible[0]
 
-    def best(self, *, device: torch.device | str | None = None, grad: bool = True, **region: Any) -> Backend:
+    def best(self, *, device: torch.device | str | None = None, grad: bool = True, **region: Any) -> Implementation:
         allowed = self.op._dims | self.op.arg_pools.keys() | {"dtype"}
         if unknown := set(region) - allowed:
             raise TypeError(f"{self.op.name}: unknown filter keys {sorted(unknown)}; allowed: {sorted(allowed)}")

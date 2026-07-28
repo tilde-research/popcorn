@@ -47,7 +47,7 @@ def _stratum_key(record: Record) -> tuple[Any, ...]:
 def _labels(records: Sequence[Record], backend: str) -> dict[tuple[Any, ...], dict[str, dict[int, str]]]:
     buckets: dict[tuple[Any, ...], dict[str, dict[int, str]]] = defaultdict(lambda: defaultdict(dict))
     for record in records:
-        if record.backend != backend or record.result.status not in ("pass", "fail", "crash", "oom"):
+        if record.impl != backend or record.result.status not in ("pass", "fail", "crash", "oom"):
             continue
         label = "fail" if record.result.status in ("fail", "crash") else record.result.status
         key = _stratum_key(record)
@@ -107,7 +107,7 @@ def plan(
     pools = {name: _dim_pool(op, name) for name in sorted(op._dims)}
     anchor = _anchor(op)
     labeled = _labels(records, backend)
-    regions = fit((record for record in records if record.backend == backend), op._dims)
+    regions = fit((record for record in records if record.impl == backend), op._dims)
     dtype = next((dt for dt in DTYPES if any("float" in kind for spec in op.specs for kind in spec.dtypes)), torch.float32)
     batch = (2048,) if any(... in spec.tokens for spec in op.specs) else ()
     args, present = _default_args(op), frozenset()

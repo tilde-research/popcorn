@@ -52,20 +52,20 @@ def _takes_context(transform: Callable[..., Any]) -> bool:
             raise TypeError(f"test input transform {transform!r} must accept one or three positional arguments") from None
 
 
-class Backend:
+class Implementation:
     """One implementation of an op: an external `source` (a dotted path,
     resolved lazily and served as `kernel` while the adapter runs), an
     `adapter` bridging the reference signature to it, or both.
 
-    A backend owns its eligibility -- `gates` are the narrowed annotations
-    collected from its adapter, `predicate` is an arbitrary veto, and
+    An implementation owns its eligibility -- `gates` are the narrowed
+    annotations collected from its adapter, `predicate` is an arbitrary veto, and
     `forward_only=True` marks an implementation that must decline calls
     needing autograd -- and its lifecycle: conformance is validated when an
     adapter attaches, availability when first invoked. Shape validity comes
     from recorded rows and fitted regions, not declarations.
 
-    Calling a backend forces it for that call; entering it scopes every call
-    in the block: `with rms_norm["fla"] as rms_norm: ...`.
+    Calling an implementation forces it for that call; entering it scopes every
+    call in the block: `with rms_norm["fla"] as rms_norm: ...`.
     """
 
     def __init__(
@@ -115,7 +115,7 @@ class Backend:
 
     @cached_property
     def fingerprint(self) -> str | None:
-        """Digest of the code this backend would run; None disables staleness checks."""
+        """Digest of the code this implementation would run; None disables staleness checks."""
         parts = [self.adapter, self.predicate]
         if self.source is not None and self.source.startswith(SCOPES):
             try:
@@ -126,7 +126,7 @@ class Backend:
         return fingerprint(*(part for part in parts if part is not None))
 
     def rejects(self, values: Mapping[str, Any], arguments: Mapping[str, Any]) -> str | None:
-        """Why this backend must decline the call, or None if it is eligible."""
+        """Why this implementation must decline the call, or None if it is eligible."""
         if reason := unavailable_reason(self.name):
             return reason
         if self.forward_only and self.op._needs_grad(arguments):
@@ -204,8 +204,8 @@ class Backend:
 
 
 class Dispatcher:
-    """An op: the torch reference plus registered backends, called like the
-    reference. The backend is decided at call time, never stored: the user
+    """An op: the torch reference plus registered implementations, called like the
+    reference. The implementation is decided at call time, never stored: the user
     forces one (`backend=`, `op["fla"](...)`, or `with op["fla"]:`), otherwise
     the tuner picks the fastest eligible one from recorded benchmarks. The
     tuner's per-signature memoization is the only cache, purely an optimization.
@@ -252,7 +252,7 @@ class Dispatcher:
         # dispatch state
         self.torch_op: Any = None  # torch.library binding, set by bind_torch_op
         self.torch_op_train: Any = None  # scalar unit-VJP binding for compile joint patterns
-        self._backends: list[Backend] = [Backend(self, "torch", adapter=reference)]
+        self._impls: list[Implementation] = [Implementation(self, "torch", adapter=reference)]
         self.bench = BenchmarkService(self)
         self.tuner = Tuner(self, self.bench.store)
         self._scoped: ContextVar[str | None] = ContextVar(f"popcorn.{self.name}", default=None)
@@ -315,11 +315,11 @@ class Dispatcher:
     def benchmark(self, *args: Any, backend: str | None = None, **kwargs: Any) -> list[Record]:
         return self._assess(args, kwargs, backend, benchmark=True)
 
-    def __getitem__(self, name: str) -> Backend:
-        for backend in self._backends:
-            if backend.name == name:
+    def __getitem__(self, name: str) -> Implementation:
+        for impl in self._impls:
+            if impl.name == name:
                 ensure_available(name)  # forcing an uninstalled backend errors with the install hint
-                return backend
+                return impl
         raise DispatchError(f"{self.name}: unknown backend {name!r}; available: {', '.join(self.available_backends())}")
 
     def register(
@@ -329,28 +329,28 @@ class Dispatcher:
         predicate: Callable[..., bool] | None = None,
         forward_only: bool = False,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        if any(b.name == name for b in self._backends):
+        if any(b.name == name for b in self._impls):
             raise ValueError(f"{self.name}: backend {name!r} already registered")
-        backend = Backend(self, name, source=source, predicate=predicate, forward_only=forward_only)
-        self._backends.insert(-1, backend)  # registration order, torch reference last
+        impl = Implementation(self, name, source=source, predicate=predicate, forward_only=forward_only)
+        self._impls.insert(-1, impl)  # registration order, torch reference last
         self.tuner.forget()
 
         def attach(fn: Callable[..., Any]) -> Callable[..., Any]:
             try:
-                backend.attach(fn)
+                impl.attach(fn)
             except Exception:
-                self._backends.remove(backend)
+                self._impls.remove(impl)
                 raise
             return fn
 
         return attach
 
     def available_backends(self) -> tuple[str, ...]:
-        return tuple(b.name for b in self._backends)
+        return tuple(b.name for b in self._impls)
 
     def __repr__(self) -> str:
         lines = [f"{self.name}{self._signature}"]
-        for b in self._backends:
+        for b in self._impls:
             lines.append(f"  {b.name}" + "".join(f"  {note}" for note in b.notes()))
         return "\n".join(lines)
 
@@ -407,13 +407,15 @@ class Dispatcher:
         bound.apply_defaults()
         return bound.arguments
 
-    def _eligible(self, values: Mapping[str, Any], arguments: Mapping[str, Any], forced: str | None = None) -> list[Backend]:
+    def _eligible(
+        self, values: Mapping[str, Any], arguments: Mapping[str, Any], forced: str | None = None
+    ) -> list[Implementation]:
         if forced is not None:
-            backend = self[forced]
-            if rejection := backend.rejects(values, arguments):
+            impl = self[forced]
+            if rejection := impl.rejects(values, arguments):
                 raise DispatchError(f"{self.name}: backend {forced!r} rejected call: {rejection}")
-            return [backend]
-        return [backend for backend in self._backends if backend.rejects(values, arguments) is None]
+            return [impl]
+        return [impl for impl in self._impls if impl.rejects(values, arguments) is None]
 
     def _assess(self, args: tuple[Any, ...], kwargs: dict[str, Any], backend: str | None, *, benchmark: bool) -> list[Record]:
         arguments = self._bind(*args, **kwargs)

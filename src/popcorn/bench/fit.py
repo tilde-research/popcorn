@@ -173,7 +173,7 @@ def _label_rank(label: str) -> int:
 
 
 def fit(records: Iterable[Record], dims: Iterable[str]) -> dict[tuple[Any, ...], Region]:
-    """Group conclusive rows by (backend, stratum) and fit Spaces + Reals."""
+    """Group conclusive rows by (implementation, stratum) and fit Spaces + Reals."""
     dim_names = list(dims)
     dim_buckets: dict[tuple[Any, ...], dict[str, dict[int, str]]] = defaultdict(lambda: defaultdict(dict))
     real_buckets: dict[tuple[Any, ...], dict[str, dict[float, str]]] = defaultdict(lambda: defaultdict(dict))
@@ -183,7 +183,7 @@ def fit(records: Iterable[Record], dims: Iterable[str]) -> dict[tuple[Any, ...],
         if status not in ("pass", "fail", "crash", "oom"):
             continue
         label = "fail" if status in ("fail", "crash") else status
-        key = (record.backend, *stratum(record))
+        key = (record.impl, *stratum(record))
         counts[key] += status == "pass"
         for name in dim_names:
             if name in record.config["dims"]:

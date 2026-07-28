@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
 
-from popcorn.bench.model import Record
+from popcorn.bench.model import SCHEMA, Record
 from popcorn.core.config import Call
 
 try:
@@ -21,10 +21,16 @@ _WRITE_LOCK = Lock()
 
 
 def user_reports() -> Path:
+    """Per-user report cache, namespaced by report schema.
+
+    The generation segment tracks `SCHEMA`, so a schema bump lands in a fresh
+    directory instead of feeding rows to a reader that would reject them; caches
+    from older generations are left untouched beside it.
+    """
     root = os.getenv("POPCORN_CACHE_DIR")
     if root is None:
         root = Path(os.getenv("XDG_CACHE_HOME", Path.home() / ".cache")) / "popcorn"
-    return Path(root).expanduser() / "v2" / "reports"
+    return Path(root).expanduser() / f"v{SCHEMA}" / "reports"
 
 
 def conclusive(record: Record) -> bool:
@@ -114,7 +120,7 @@ class Store:
     def exact(
         self,
         op: str,
-        backend: str,
+        impl: str,
         call: Call,
         torch_version: str,
         backend_version: str | None,
@@ -125,7 +131,7 @@ class Store:
         found = [
             record
             for record in (self.merged(op) if records is None else records)
-            if record.backend == backend
+            if record.impl == impl
             and record.environment.device == call.device_name
             and record.environment.torch == torch_version
             and record.environment.backend_version == backend_version

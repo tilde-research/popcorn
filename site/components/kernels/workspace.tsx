@@ -12,7 +12,7 @@ import { PlotPane } from './plot-pane';
 
 function usageSnippet(k: Kernel): string {
   const call = k.params.filter((p) => p.default === undefined).map((p) => p.name).join(', ');
-  const forced = k.backends.find((b) => b.name !== 'torch')?.name;
+  const forced = k.impls.find((b) => b.name !== 'torch')?.name;
   const lines = [`from popcorn.kernels import ${k.name}`, '', `out = ${k.name}(${call})  # auto-dispatch`];
   if (forced) lines.push(`out = ${k.name}(${call}, backend="${forced}")  # force a backend`);
   return lines.join('\n');
@@ -88,7 +88,7 @@ function InfoPane({ k }: { k: Kernel }) {
             </tr>
           </thead>
           <tbody>
-            {k.backends.map((b) => (
+            {k.impls.map((b) => (
               <tr key={b.name} className="border-b last:border-0">
                 <td className="py-2 pr-4 font-mono font-semibold">{b.name}</td>
                 <td className="py-2 pr-4 font-mono text-xs text-fd-muted-foreground">{b.source ?? 'reference'}</td>
@@ -178,7 +178,7 @@ export function Workspace({ entries }: { entries: KernelIndexEntry[] }) {
       <div className="flex items-center gap-2">
         <span className="truncate font-mono text-sm font-semibold">{entry.name}</span>
         <span className="ms-auto shrink-0 text-[11px] text-fd-muted-foreground">
-          {entry.backends.length} backend{entry.backends.length === 1 ? '' : 's'}
+          {entry.impls.length} backend{entry.impls.length === 1 ? '' : 's'}
         </span>
         <button
           title={isPinned ? 'Unpin' : `Pin to compare (max ${MAX_PINNED})`}

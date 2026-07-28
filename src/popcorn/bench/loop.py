@@ -278,7 +278,7 @@ def cmd_try(args: argparse.Namespace) -> None:
 
 
 def _best_speedups(records: Sequence[Record]) -> list[float]:
-    """Per (case, grad mode), the best recorded backend speedup over the reference."""
+    """Per (case, grad mode), the best recorded implementation speedup over the reference."""
     best: dict[tuple[str, bool], float] = {}
     for record in records:
         if record.result.status != "pass":
@@ -296,7 +296,7 @@ def cmd_targets(args: argparse.Namespace) -> None:
     rows: list[tuple[float, float, str]] = []
     for name in args.ops or sorted(KERNELS):
         op = _op(name)
-        records = [record for record in store.merged(name) if record.backend != "torch"]
+        records = [record for record in store.merged(name) if record.impl != "torch"]
         if args.hardware:
             records = [record for record in records if args.hardware.lower() in record.environment.device.lower()]
         tested: dict[tuple[str, bool], list[Record]] = defaultdict(list)
@@ -308,7 +308,7 @@ def cmd_targets(args: argparse.Namespace) -> None:
         grad_coverage = len(passing & grad_keys) / len(grad_keys) if grad_keys else 0.0
         speedups = _best_speedups(records)
         median = statistics.median(speedups) if speedups else None
-        backends = ",".join(sorted({record.backend for record in records})) or "-"
+        backends = ",".join(sorted({record.impl for record in records})) or "-"
         line = (
             f"{name:<28} {backends[:24]:<24} {len(tested):>6} {coverage:>7.0%} {grad_coverage:>7.0%} "
             f"{f'{median:.2f}x' if median is not None else '-':>8} {len(op.available_backends()) - 1:>4}"

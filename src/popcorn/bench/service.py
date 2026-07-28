@@ -20,7 +20,7 @@ from popcorn.core.errors import BackendUnavailableError, BackendVersionError, Di
 from popcorn.core.sources import installed_version
 
 if TYPE_CHECKING:
-    from popcorn.core.dispatcher import Backend, Dispatcher
+    from popcorn.core.dispatcher import Dispatcher, Implementation
 
 logger = logging.getLogger("popcorn.bench")
 
@@ -65,12 +65,12 @@ class BenchmarkService:
         )
         return Record(self.op.name, backend, str(case), case.case_id, case.config(), environment, result)
 
-    def _registered(self, backend: str) -> Backend:
-        return next(candidate for candidate in self.op._backends if candidate.name == backend)
+    def _registered(self, backend: str) -> Implementation:
+        return next(candidate for candidate in self.op._impls if candidate.name == backend)
 
     def _compare(
         self,
-        chosen: Backend,
+        chosen: Implementation,
         inputs: Iterable[Mapping[str, Any]],
         *,
         backward: bool,
@@ -161,7 +161,7 @@ class BenchmarkService:
             logger.info(
                 "%s:%s [%s] %s%s%s",
                 record.op,
-                record.backend,
+                record.impl,
                 result.status,
                 record.case,
                 f" {timing}" if timing else "",

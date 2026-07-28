@@ -327,11 +327,11 @@ def report(
                peak        0.77 GB ->      0.77 GB
                err 0.00e+00 on scale 10.8
 
-    A `Record` from `op.validate` or `op.benchmark` names itself after its backend.
+    A `Record` from `op.validate` or `op.benchmark` names itself after its implementation.
     """
     if isinstance(subject, Record):
-        result, label = subject.result, label or subject.backend
-        mine, reference = mine or subject.backend, reference or "torch"
+        result, label = subject.result, label or subject.impl
+        mine, reference = mine or subject.impl, reference or "torch"
     else:
         result, mine, reference = subject, mine or "mine", reference or "ref"
     width = max(len(label), 8)

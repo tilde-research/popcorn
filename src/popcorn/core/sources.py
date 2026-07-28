@@ -1,4 +1,9 @@
-"""Backend package declarations and lazy source resolution."""
+"""Backend library declarations and lazy source resolution.
+
+A backend is a library (`fla`, `liger`); an implementation is named after the
+backend providing it, optionally with a variant suffix (`fla:recurrent`). Every
+lookup here takes an implementation name and resolves the backend from its prefix.
+"""
 
 from __future__ import annotations
 
@@ -42,8 +47,8 @@ def declare_backend(
     _BACKENDS[name] = _BackendSpec(package, min_version, max_version, extra)
 
 
-def _failure(backend_name: str) -> BackendUnavailableError | BackendVersionError | None:
-    declared = _BACKENDS.get(backend_name.split(":")[0])
+def _failure(impl: str) -> BackendUnavailableError | BackendVersionError | None:
+    declared = _BACKENDS.get(impl.split(":")[0])
     if declared is None:
         return None
     if declared.installed is None:
@@ -54,7 +59,7 @@ def _failure(backend_name: str) -> BackendUnavailableError | BackendVersionError
             declared.installed = False
     if not declared.installed or declared.version is None:
         install = f"popcorn[{declared.extra}]" if declared.extra else declared.package
-        return BackendUnavailableError(f"backend {backend_name!r} needs {declared.package!r}; install {install}")
+        return BackendUnavailableError(f"implementation {impl!r} needs {declared.package!r}; install {install}")
     lo, hi = declared.min_version, declared.max_version
     if lo is None and hi is None:
         return None
@@ -63,38 +68,38 @@ def _failure(backend_name: str) -> BackendUnavailableError | BackendVersionError
     ):
         return BackendVersionError(
             f"{declared.package} {declared.version} is outside the supported range "
-            f"[{lo or '*'}, {hi or '*'}] of backend {backend_name!r}"
+            f"[{lo or '*'}, {hi or '*'}] required by implementation {impl!r}"
         )
     return None
 
 
-def unavailable_reason(backend_name: str) -> str | None:
-    """Why this backend cannot run, or None when its dependency is usable."""
-    failure = _failure(backend_name)
+def unavailable_reason(impl: str) -> str | None:
+    """Why this implementation cannot run, or None when its backend is usable."""
+    failure = _failure(impl)
     return str(failure) if failure else None
 
 
-def available(backend_name: str) -> bool:
-    """Whether the backend's package is installed at a supported version."""
-    return _failure(backend_name) is None
+def available(impl: str) -> bool:
+    """Whether the implementation's backend package is installed at a supported version."""
+    return _failure(impl) is None
 
 
-def installed_version(backend_name: str) -> str | None:
-    """Installed distribution version, if this backend has one."""
-    declared = _BACKENDS.get(backend_name.split(":")[0])
+def installed_version(impl: str) -> str | None:
+    """Installed distribution version of this implementation's backend, if it has one."""
+    declared = _BACKENDS.get(impl.split(":")[0])
     if declared is None:
         return None
-    _failure(backend_name)
+    _failure(impl)
     return declared.version
 
 
-def ensure_available(backend_name: str) -> None:
-    failure = _failure(backend_name)
+def ensure_available(impl: str) -> None:
+    failure = _failure(impl)
     if failure:
         raise failure
-    declared = _BACKENDS.get(backend_name.split(":")[0])
+    declared = _BACKENDS.get(impl.split(":")[0])
     if declared is not None and declared.min_version is None and declared.max_version is None and not declared.warned:
-        warnings.warn(f"backend {backend_name!r}: no supported version range declared for {declared.package}")
+        warnings.warn(f"implementation {impl!r}: no supported version range declared for {declared.package}")
         declared.warned = True
 
 
@@ -124,7 +129,7 @@ _active_source: ContextVar[Callable[..., Any]] = ContextVar("popcorn_kernel")
 
 
 class _Kernel:
-    """The current backend's source, bound by the dispatcher for the duration of
+    """The current implementation's source, bound by the dispatcher for the duration of
     a call. Calling it calls the source; attribute access reaches into it, so a
     module source serves several callables (`kernel.matmul`, `kernel.pack_weights`)
     and a class source serves its methods."""
@@ -133,7 +138,7 @@ class _Kernel:
         try:
             source = _active_source.get()
         except LookupError:
-            raise RuntimeError("kernel() is only valid inside a backend registered with source=") from None
+            raise RuntimeError("kernel() is only valid inside an implementation registered with source=") from None
         return source(*args, **kwargs)
 
     def __getattr__(self, name: str) -> Any:
@@ -142,7 +147,7 @@ class _Kernel:
         try:
             source = _active_source.get()
         except LookupError:
-            raise AttributeError(f"kernel.{name} is only valid inside a backend registered with source=") from None
+            raise AttributeError(f"kernel.{name} is only valid inside an implementation registered with source=") from None
         return getattr(source, name)
 
 

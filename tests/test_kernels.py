@@ -75,10 +75,10 @@ def test_adapters_are_import_free():
         return any(imports(const) for const in code.co_consts if isinstance(const, CodeType))
 
     offenders = [
-        f"{op.name}:{backend.name}"
+        f"{op.name}:{impl.name}"
         for op in KERNELS.values()
-        for backend in op._backends
-        if backend.adapter is not None and imports(backend.adapter.__code__)
+        for impl in op._impls
+        if impl.adapter is not None and imports(impl.adapter.__code__)
     ]
     assert not offenders, f"function-body imports in adapters: {offenders}"
 

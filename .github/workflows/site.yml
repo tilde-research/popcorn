@@ -32,7 +32,7 @@ jobs:
           cache-dependency-path: site/package-lock.json
       - run: uv venv
       - run: uv pip install --torch-backend=cpu -e .
-      - run: uv run --no-sync python scripts/export_site_data.py
+      - run: uv run --no-sync python scripts/update_site.py
       - run: npm ci
         working-directory: site
       - run: npm run build

@@ -227,7 +227,7 @@ def test_reports_and_viewer_consume_typed_records():
     records = [_record(), _record("skip", "other")]
     assert "| op | fast | cpu | 1 | 1 |" in matrix(records)
     assert "No report rows." in render([])
-    assert '"schema":2' in render(records)
+    assert '"schema":3' in render(records)
 
 
 def test_empty_cli_work_is_an_error(tmp_path):

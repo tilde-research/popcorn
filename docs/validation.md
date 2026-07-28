@@ -11,7 +11,7 @@ records = rms_norm.validate(x, weight)
 assert all(record.result.status == "pass" for record in records)
 ```
 
-Each record names its backend. To print one labelled block per implementation:
+Each record names its implementation. To print one labelled block per implementation:
 
 ```python
 from popcorn.bench import report

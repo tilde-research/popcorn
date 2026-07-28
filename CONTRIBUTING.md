@@ -249,7 +249,7 @@ Before any case runs, `run` and `map` pin the target: a bare `--device cuda` res
 
 A successful row may also have `bench_error`; correctness remains valid, but the timing must be rerun. In the detail matrix printed by `scripts/update_readme.py`, ✔ means every tested case passes, ✔* means at least one passes while another is gated, failed, or unverified, and ✘ means no case passes.
 
-`op.validate(*args, backend=None, **kwargs)` checks a real call without timing. `op.benchmark(*args, backend=None, **kwargs)` checks and times it. Both return one `Record` per eligible backend, so `popcorn.bench.report(record)` prints a labelled latency, memory, and error block; `record.result` holds the raw status and gauges. These APIs write `${POPCORN_CACHE_DIR:-${XDG_CACHE_HOME:-~/.cache}/popcorn}/v2/reports` and never modify checked-in reports or the README.
+`op.validate(*args, backend=None, **kwargs)` checks a real call without timing. `op.benchmark(*args, backend=None, **kwargs)` checks and times it. Both return one `Record` per eligible backend, so `popcorn.bench.report(record)` prints a labelled latency, memory, and error block; `record.result` holds the raw status and gauges. These APIs write `${POPCORN_CACHE_DIR:-${XDG_CACHE_HOME:-~/.cache}/popcorn}/v<schema>/reports`, where `<schema>` is the current report schema version, and never modify checked-in reports or the README.
 
 Automatic dispatch admits a backend only with an exact pass row or membership in a fitted validity region (derived from report rows). Otherwise the reference serves the call. `POPCORN_BENCH=1` lazily measures and records on first encounter. Map regions with `python -m popcorn.bench map --effort standard`.
 

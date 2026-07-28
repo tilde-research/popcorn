@@ -44,9 +44,9 @@ def _exact_pass_row(op, x, backend="alt", *, status="pass", reason="", bench=Non
     arguments = bound.arguments
     call = call_config(op, op._values(arguments), arguments)
     return {
-        "schema": 2,
+        "schema": 3,
         "op": op.name,
-        "backend": backend,
+        "impl": backend,
         "device": call.device_name,
         "case": "exact",
         "case_id": f"{backend}-{config_id(call.config)}",
@@ -162,9 +162,9 @@ class TestDispatch:
             [
                 Record.from_dict(
                     {
-                        "schema": 2,
+                        "schema": 3,
                         "op": "op",
-                        "backend": "fast",
+                        "impl": "fast",
                         "device": device_name("cpu"),
                         "case": "",
                         "case_id": f"d{n}",
@@ -232,9 +232,9 @@ class TestDispatch:
             [
                 Record.from_dict(
                     {
-                        "schema": 2,
+                        "schema": 3,
                         "op": "op",
-                        "backend": "fast",
+                        "impl": "fast",
                         "device": device_name("cpu"),
                         "case": "",
                         "case_id": "d4",
@@ -368,16 +368,16 @@ class TestRegistration:
         for path in (Path(kernels.__file__).parents[1] / "impls").glob("[!_]*.py"):
             op_name, _, tech = path.stem.rpartition("_")
             assert tech in {"tl", "cu"}, f"impl module {path.name} must end in _tl or _cu"
-            backend = next(b for b in KERNELS[op_name]._backends if b.name == "popcorn")
-            assert backend.source == f"popcorn.impls.{path.stem}.{op_name}"
+            impl = next(b for b in KERNELS[op_name]._impls if b.name == "popcorn")
+            assert impl.source == f"popcorn.impls.{path.stem}.{op_name}"
         for op in KERNELS.values():
             if "softmax_scale" in op.arg_pools:
                 assert len(op.arg_pools["softmax_scale"]) > 1
-            backends = [backend for backend in op._backends if backend.name != "torch"]
-            assert [backend.name for backend in backends] == sorted(backend.name for backend in backends)
-            for backend in backends:
-                if backend.adapter is not None:
-                    assert backend.adapter.__name__ == f"{op.name}_{backend.name.replace(':', '_')}"
+            impls = [impl for impl in op._impls if impl.name != "torch"]
+            assert [impl.name for impl in impls] == sorted(impl.name for impl in impls)
+            for impl in impls:
+                if impl.adapter is not None:
+                    assert impl.adapter.__name__ == f"{op.name}_{impl.name.replace(':', '_')}"
 
     def test_reference_signature_conventions(self):
         import popcorn.kernels  # noqa: F401
@@ -617,15 +617,15 @@ class TestTuning:
         monkeypatch.delenv("POPCORN_VALIDATE", raising=False)
         monkeypatch.delenv("POPCORN_BENCH", raising=False)
         self.old_cache = tmp_path / "cache" / "reports"
-        self.cache = tmp_path / "cache" / "v2" / "reports"
+        self.cache = store.user_reports()
         self.device = device_name("cpu")
 
     def _record(self, *rows):
         full = [
             {
-                "schema": 2,
+                "schema": 3,
                 "op": "op",
-                "backend": backend,
+                "impl": backend,
                 "device": self.device,
                 "case": "",
                 "case_id": f"{backend}-{dims['D']}",
@@ -655,9 +655,9 @@ class TestTuning:
         arguments = bound.arguments
         call = call_config(op, op._values(arguments), arguments)
         return {
-            "schema": 2,
+            "schema": 3,
             "op": op.name,
-            "backend": backend,
+            "impl": backend,
             "device": call.device_name,
             "case": "exact",
             "case_id": config_id(call.config),
@@ -734,9 +734,9 @@ class TestTuning:
 
         def row(batch, fwd, ref):
             return {
-                "schema": 2,
+                "schema": 3,
                 "op": "op",
-                "backend": "alt",
+                "impl": "alt",
                 "device": self.device,
                 "case": "",
                 "case_id": str(batch),
@@ -948,7 +948,7 @@ class TestTuning:
         op.register("alt")(lambda x, weight, flag: x + 1)
         with caplog.at_level(logging.INFO, logger="popcorn.bench"):
             records = op.validate(torch.zeros(2, 4))
-        assert [(record.backend, record.result.status) for record in records] == [("alt", "pass")]
+        assert [(record.impl, record.result.status) for record in records] == [("alt", "pass")]
         assert any("op:alt [pass]" in message for message in caplog.messages)
         assert any("recorded 1 row(s)" in message for message in caplog.messages)
 
@@ -959,7 +959,7 @@ class TestTuning:
         op(x)
         assert op.tuner._selected
         [record] = op.validate(x, backend="alt")
-        assert record.backend == "alt" and record.result.status == "fail"
+        assert record.impl == "alt" and record.result.status == "fail"
         assert not op.tuner._selected
         assert (self.cache / "op.jsonl").exists()
         assert torch.equal(op(x), torch.ones_like(x))
@@ -969,7 +969,7 @@ class TestTuning:
         op.register("alt")(lambda x, weight, flag: x + 1)
         [record] = op.benchmark(torch.zeros(2, 4), backend="alt")
         result = record.result
-        assert record.backend == "alt" and result.status == "pass" and result.benchmarked
+        assert record.impl == "alt" and result.status == "pass" and result.benchmarked
         assert result.bench["fwd_ms"] > 0 and result.bench["ref_fwd_ms"] > 0
         assert report(record).startswith("alt")
 

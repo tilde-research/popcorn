@@ -11,7 +11,7 @@ import torch
 
 from popcorn.core.config import config_id, make_config
 
-SCHEMA = 2
+SCHEMA = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,10 +92,10 @@ class Environment:
 
 @dataclass(slots=True)
 class Record:
-    """One stored report row: an op/backend/case triple with its environment and result."""
+    """One stored report row: an op/implementation/case triple with its environment and result."""
 
     op: str
-    backend: str
+    impl: str
     case: str
     case_id: str
     config: dict
@@ -106,7 +106,7 @@ class Record:
         return {
             "schema": SCHEMA,
             "op": self.op,
-            "backend": self.backend,
+            "impl": self.impl,
             "case": self.case,
             "case_id": self.case_id,
             "config": self.config,
@@ -137,13 +137,13 @@ class Record:
         environment = Environment(
             row["device"], row["torch"], row.get("backend_version"), row["ts"], row.get("ref_hash"), row.get("impl_hash")
         )
-        return cls(row["op"], row["backend"], row.get("case", ""), row["case_id"], row["config"], environment, result)
+        return cls(row["op"], row["impl"], row.get("case", ""), row["case_id"], row["config"], environment, result)
 
     @property
     def key(self) -> tuple[Any, ...]:
         return (
             self.op,
-            self.backend,
+            self.impl,
             self.environment.device,
             self.case_id,
             self.result.grad,

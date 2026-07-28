@@ -263,7 +263,7 @@ export function filterRows(kernel: Kernel, selection: Selection, controls: Contr
   // Forward pass: prefer the no-grad measurement when a case was recorded both ways.
   const byCase = new Map<string, KernelRow>();
   for (const row of candidates) {
-    const key = `${row.backend}|${JSON.stringify(row.dims)}`;
+    const key = `${row.impl}|${JSON.stringify(row.dims)}`;
     const current = byCase.get(key);
     if (!current || (selection.pass === 'forward' ? !row.grad && current.grad : row.grad && !current.grad))
       byCase.set(key, row);

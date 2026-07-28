@@ -95,7 +95,8 @@ def _work(ops: list[str], backend: str | None = None, limit: int | None = None) 
 
 def _publish(records: list[Record]) -> None:
     write(records, BUNDLED_REPORTS)
-    print(refresh(ops=KERNELS))
+    matrix, _ = refresh(ops=KERNELS)
+    print(matrix)
 
 
 def _append(path: Path, record: Record) -> None:
@@ -141,7 +142,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                     other.bench.incomplete(candidate, other_case, args.device, reason)
                     for other, candidate, other_case in work[index + 1 :]
                 )
-            print(f"{reason} after {record.op}:{record.backend} {record.case}")
+            print(f"{reason} after {record.op}:{record.impl} {record.case}")
             poisoned = True
             break
     if not out:
@@ -152,7 +153,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     for record in failures[:20]:
         result = record.result
         reason = result.reason or f"benchmark: {result.bench_error}"
-        print(f"\n[{result.status}] {record.op}:{record.backend} {record.case}\n  {reason}")
+        print(f"\n[{result.status}] {record.op}:{record.impl} {record.case}\n  {reason}")
     raise SystemExit(1 if failures or poisoned else 0)
 
 
@@ -185,7 +186,7 @@ def cmd_map(args: argparse.Namespace) -> None:
     for op in ops:
         backends = [name for name in op.available_backends() if name != "torch" and args.backend in (None, name)]
         for backend in backends:
-            registered = next(candidate for candidate in op._backends if candidate.name == backend)
+            registered = next(candidate for candidate in op._impls if candidate.name == backend)
             rounds = 0
             while rounds < args.rounds:
                 records = store.merged(op.name)

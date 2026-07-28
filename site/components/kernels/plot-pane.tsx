@@ -130,14 +130,14 @@ export function PlotPane({ kernels }: { kernels: Kernel[] }) {
       const filtered = filterRows(kernel, selection, controls);
       const label = (backend: string) => (multi ? `${kernel.name} · ${backend}` : backend);
       const refs: number[] = [];
-      for (const row of [...filtered].sort((a, b) => a.backend.localeCompare(b.backend))) {
+      for (const row of [...filtered].sort((a, b) => a.impl.localeCompare(b.impl))) {
         const value = metric.value(row, selection.pass);
         const ref = referenceValue(row);
         if (ref !== null) refs.push(ref);
         if (value === null) continue;
-        labels.push(label(row.backend));
+        labels.push(label(row.impl));
         values.push(value);
-        colors.push(backendColor(row.backend));
+        colors.push(backendColor(row.impl));
         cutoffs.push(metric.cutoff ? metric.cutoff(row, selection.pass) : null);
       }
       if (refs.length > 0) {
@@ -172,10 +172,10 @@ export function PlotPane({ kernels }: { kernels: Kernel[] }) {
       const filtered = filterRows(kernel, selection, controls);
       const dash = DASHES[position % DASHES.length];
       const label = (backend: string) => (multi ? `${kernel.name} · ${backend}` : backend);
-      const series = [...new Set(filtered.map((row) => row.backend))].sort().map((backend) => ({
+      const series = [...new Set(filtered.map((row) => row.impl))].sort().map((backend) => ({
         backend,
         points: filtered
-          .filter((row) => row.backend === backend)
+          .filter((row) => row.impl === backend)
           .map((row) => ({ row, x: row.dims[selection.x], y: metric.value(row, selection.pass) })),
       }));
       // One synthetic torch series per kernel (median across backends' ref values).

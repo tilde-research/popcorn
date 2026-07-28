@@ -24,7 +24,7 @@ from popcorn.core.errors import DispatchError
 if TYPE_CHECKING:
     from popcorn.bench.model import Record
     from popcorn.core.config import Call
-    from popcorn.core.dispatcher import Backend
+    from popcorn.core.dispatcher import Implementation
     from popcorn.core.tuning import Sample
 
 INDIFFERENCE = 0.03
@@ -37,11 +37,11 @@ def _env_flag(name: str) -> bool:
 class DecisionContext(Protocol):
     """Read-only view the policy needs from the tuner."""
 
-    def exact(self, backend: Backend, call: Call) -> Record | None: ...
+    def exact(self, impl: Implementation, call: Call) -> Record | None: ...
 
-    def region_for(self, backend: Backend, call: Call) -> Region | None: ...
+    def region_for(self, impl: Implementation, call: Call) -> Region | None: ...
 
-    def mapped(self, backend: str) -> bool: ...
+    def mapped(self, impl: str) -> bool: ...
 
     @property
     def samples(self) -> tuple[Sample, ...]: ...
@@ -71,61 +71,61 @@ class Policy:
             return replace(self, unsafe=True)
         return self
 
-    def blocked(self, backend: Backend, call: Call | None, forced: str | None, ctx: DecisionContext) -> bool:
+    def blocked(self, impl: Implementation, call: Call | None, forced: str | None, ctx: DecisionContext) -> bool:
         """True → drop from eligible. Forced failures raise `DispatchError`."""
-        if backend.name == "torch" or call is None:
+        if impl.name == "torch" or call is None:
             return False
-        record = ctx.exact(backend, call)
+        record = ctx.exact(impl, call)
         status = record.result.status if record else None
         if status in ("fail", "crash"):
-            if forced == backend.name:
+            if forced == impl.name:
                 reason = (record.result.reason if record else "") or status
-                raise DispatchError(f"{ctx.op_name}: backend {backend.name!r} failed validation: {reason}")
+                raise DispatchError(f"{ctx.op_name}: backend {impl.name!r} failed validation: {reason}")
             return True
         if status == "pass":
             return False
-        region = ctx.region_for(backend, call)
+        region = ctx.region_for(impl, call)
         if region is not None:
             if region.contains(call.config["dims"], call.config["args"]):
                 return False
             # Outside the fitted envelope.
             if self.unsafe:
                 return False  # extrapolate; ranking keeps nearer proven backends ahead
-            if forced == backend.name:
+            if forced == impl.name:
                 raise DispatchError(
-                    f"{ctx.op_name}: backend {backend.name!r} is outside its validity region: "
+                    f"{ctx.op_name}: backend {impl.name!r} is outside its validity region: "
                     f"{region.reject(call.config['dims'], call.config['args'])}"
                 )
             return True
         # No region on this stratum.
-        if forced == backend.name:
+        if forced == impl.name:
             return False
         if self.unsafe:
-            # Auto-unsafe only trusts backends that have proven *some* range.
-            return not ctx.mapped(backend.name)
+            # Auto-unsafe only trusts implementations that have proven *some* range.
+            return not ctx.mapped(impl.name)
         # Safe: unmapped → registration-order eligible; other strata mapped → block.
-        return ctx.mapped(backend.name)
+        return ctx.mapped(impl.name)
 
     def choose(
         self,
-        eligible: Sequence[Backend],
+        eligible: Sequence[Implementation],
         call: Call | None,
         forced: str | None,
         ctx: DecisionContext,
-    ) -> Backend | None:
+    ) -> Implementation | None:
         """Pick a winner among `eligible`, or `None` to fall back to registration order."""
         if forced is not None or call is None:
             return None
         return self.nearest(eligible, call, ctx.samples)
 
-    def nearest(self, candidates: Sequence[Backend], call: Call, samples: Sequence[Sample]) -> Backend | None:
-        names = {backend.name for backend in candidates}
+    def nearest(self, candidates: Sequence[Implementation], call: Call, samples: Sequence[Sample]) -> Implementation | None:
+        names = {impl.name for impl in candidates}
         config = call.config
         want = speed_discrete(config["args"])
         pool = [
             sample
             for sample in samples
-            if sample.backend in names
+            if sample.impl in names
             and sample.device == call.device_name
             and sample.grad == call.grad
             and sample.dtype == config["dtype"]
@@ -136,7 +136,7 @@ class Policy:
             return None
         nearest = min(self.distance(config, sample) for sample in pool)
         winner = self.fastest([sample for sample in pool if self.distance(config, sample) == nearest])
-        return next((backend for backend in candidates if backend.name == winner), None)
+        return next((impl for impl in candidates if impl.name == winner), None)
 
     @staticmethod
     def log_gap(left: float, right: float) -> float:
@@ -163,8 +163,8 @@ class Policy:
 
     def fastest(self, samples: Sequence[Sample]) -> str:
         times = {"torch": median(sample.time[1] for sample in samples)}
-        for backend in {sample.backend for sample in samples}:
-            times[backend] = median(sample.time[0] for sample in samples if sample.backend == backend)
+        for impl in {sample.impl for sample in samples}:
+            times[impl] = median(sample.time[0] for sample in samples if sample.impl == impl)
         ordered = sorted(times, key=lambda name: times[name])
         best, runner = ordered[0], ordered[1] if len(ordered) > 1 else ordered[0]
         if runner != best and times[runner] <= times[best] * (1 + self.indifference):

@@ -25,7 +25,7 @@ def _readme() -> Path:
 def matrix(records: Iterable[Record]) -> str:
     header = (
         "op",
-        "backend",
+        "impl",
         "device",
         "pass",
         "skip",
@@ -42,7 +42,7 @@ def matrix(records: Iterable[Record]) -> str:
     lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
     groups = defaultdict(list)
     for record in records:
-        groups[record.op, record.backend, record.environment.device].append(record)
+        groups[record.op, record.impl, record.environment.device].append(record)
     for key in sorted(groups):
         group = groups[key]
         cells: list = list(key)
@@ -79,12 +79,11 @@ def matrix(records: Iterable[Record]) -> str:
 
 def badges(records: Iterable[Record], ops: Mapping[str, Any]) -> str:
     """Shields.io badge row: registered counts plus the recorded grid size."""
-    backends = {backend.name for op in ops.values() for backend in op._backends}
-    implementations = sum(backend.name != "torch" for op in ops.values() for backend in op._backends)
+    names = [impl.name for op in ops.values() for impl in op._impls if impl.name != "torch"]
     counts = (
         ("kernels", str(len(ops))),
-        ("backends", str(len(backends))),
-        ("implementations", str(implementations)),
+        ("backends", str(len({name.split(":")[0] for name in names}))),
+        ("implementations", str(len(names))),
         ("grid rows", f"{sum(1 for _ in records):,}".replace(",", "%2C")),
     )
     images = "\n".join(
@@ -101,15 +100,32 @@ def _replaced(text: str, markers: tuple[str, str], body: str) -> str:
     return head + f"{start}\n{body}\n{end}" + tail
 
 
-def update_readme(path: Path | str, badge_row: str) -> None:
+def update_readme(path: Path | str, badge_row: str, *, write: bool = True) -> bool:
+    """Splice the badge row between the markers. True when the file is, or would be, changed."""
     path = Path(path)
     text = path.read_text()
-    if all(marker in text for marker in BADGE_MARKERS):
-        path.write_text(_replaced(text, BADGE_MARKERS, badge_row))
+    if not all(marker in text for marker in BADGE_MARKERS):
+        return False
+    updated = _replaced(text, BADGE_MARKERS, badge_row)
+    if updated == text:
+        return False
+    if write:
+        path.write_text(updated)
+    return True
 
 
-def refresh(records: Iterable[Record] | None = None, ops: Mapping[str, Any] = {}, readme: Path | str | None = None) -> str:
-    """Regenerate the README badges from the bundled reports; returns the detail matrix."""
+def refresh(
+    records: Iterable[Record] | None = None,
+    ops: Mapping[str, Any] = {},
+    readme: Path | str | None = None,
+    *,
+    write: bool = True,
+) -> tuple[str, bool]:
+    """Regenerate the README badges from the bundled reports.
+
+    Returns the detail matrix and whether the badge block is, or would be, changed.
+    `write=False` reports staleness without touching the file.
+    """
     rows = read(BUNDLED_REPORTS) if records is None else list(records)
-    update_readme(readme if readme is not None else _readme(), badges(rows, ops))
-    return matrix(rows)
+    stale = update_readme(readme if readme is not None else _readme(), badges(rows, ops), write=write)
+    return matrix(rows), stale
