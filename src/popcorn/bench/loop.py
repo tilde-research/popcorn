@@ -23,8 +23,6 @@ from itertools import chain, repeat
 from pathlib import Path
 from typing import Any
 
-import torch
-
 import popcorn.kernels  # noqa: F401
 from popcorn import KERNELS
 from popcorn.bench.compare import compare_inputs
@@ -62,16 +60,6 @@ def _candidate(op: str, impl: str | None) -> tuple[str, Any]:
         except Exception as error:
             failures.append(f"  {path}: {type(error).__name__}: {error}")
     raise SystemExit("no candidate implementation:\n" + "\n".join(failures))
-
-
-def _case_from_config(config: Mapping[str, Any]) -> Case:
-    return Case(
-        tuple(config["dims"].items()),
-        tuple(config["batch"]),
-        getattr(torch, config["dtype"]),
-        tuple(config["args"].items()),
-        frozenset(config["present"]),
-    )
 
 
 def _log_path(override: str | None, op: str) -> Path:
@@ -127,7 +115,7 @@ def _time_backend(op: Dispatcher, backend: str, case: Case, device: str, grad: b
 
 def cmd_child(args: argparse.Namespace) -> None:
     op = _op(args.op)
-    case = _case_from_config(json.loads(args.case))
+    case = Case.from_config(json.loads(args.case))
     grad = not args.forward_only
     candidate = resolve(args.impl)
     try:

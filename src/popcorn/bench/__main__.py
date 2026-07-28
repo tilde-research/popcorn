@@ -5,7 +5,9 @@ import json
 import shlex
 import subprocess
 import sys
+import tempfile
 import uuid
+from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -38,7 +40,7 @@ cd "${{SLURM_SUBMIT_DIR:-$(pwd)}}"
 export TRITON_CACHE_DIR="/tmp/triton_${{SLURM_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}"
 mkdir -p "$TRITON_CACHE_DIR"
 
-{python} -m popcorn.bench run {ops} --reps {reps} {limit} {hardware} \
+{python} -m popcorn.bench run {ops} --reps {reps} {limit} {hardware} --timeout {timeout} {only} \
     --shard "$SLURM_ARRAY_TASK_ID/{shards}" --out {shard_dir}/"$SLURM_ARRAY_TASK_ID".jsonl
 """
 
@@ -84,7 +86,44 @@ def _target_device(args: argparse.Namespace) -> str:
     return str(device)
 
 
-def _work(ops: list[str], backend: str | None = None, limit: int | None = None) -> list[tuple[Dispatcher, str, Case]]:
+def _selected(only: str, ops: list[str], backend: str | None = None) -> list[tuple[Dispatcher, str, Case]]:
+    """Rebuild exactly the cases named by recorded rows, from the config each row carries.
+
+    Rebuilding beats intersecting with a fresh grid: `cases()` samples huge product spaces,
+    so the sampled subset shifts whenever a pool or the sampler changes, and rows recorded
+    before such a change would silently drop out of a rerun.
+    """
+    work = []
+    seen = set()
+    skipped: Counter[str] = Counter()
+    for record in read_file(only):
+        triple = (record.op, record.impl, record.case_id)
+        if triple in seen or record.impl == "torch" or backend not in (None, record.impl):
+            continue
+        if ops and record.op not in ops:
+            continue
+        seen.add(triple)
+        if record.op not in KERNELS:
+            skipped[f"op {record.op!r} is not registered"] += 1
+            continue
+        op = KERNELS[record.op]
+        if record.impl not in op.available_backends():
+            skipped[f"impl {record.impl!r} is unavailable here"] += 1
+            continue
+        work.append((op, record.impl, Case.from_config(record.config)))
+    print(f"--only: {len(work)} of {len(seen)} selected cases are runnable")
+    for reason, count in skipped.most_common():
+        print(f"  {count} skipped: {reason}")
+    return work
+
+
+def _work(
+    ops: list[str], backend: str | None = None, limit: int | None = None, only: str | None = None
+) -> list[tuple[Dispatcher, str, Case]]:
+    if only is not None:
+        if limit is not None:
+            raise SystemExit("--only names exact cases; --limit does not apply")
+        return _selected(only, ops, backend)
     work = []
     for op in (KERNELS[name] for name in ops or sorted(KERNELS)):
         op_cases = cases(op, limit)
@@ -92,6 +131,37 @@ def _work(ops: list[str], backend: str | None = None, limit: int | None = None) 
             if candidate != "torch" and backend in (None, candidate):
                 work.extend((op, candidate, case) for case in op_cases)
     return work
+
+
+def _isolated(op: Dispatcher, backend: str, case: Case, device: str, reps: int, timeout: int) -> Record:
+    """Run one case in a worker process so a hang or a hard crash costs only that case."""
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
+        out = Path(handle.name)
+    command = [sys.executable, "-m", "popcorn.bench", "run-case", "--op", op.name, "--impl", backend]
+    command += ["--case", json.dumps(case.config()), "--device", device, "--reps", str(reps), "--out", str(out)]
+    try:
+        try:
+            process = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            record = op.bench.incomplete(backend, case, device, f"no result within {timeout}s")
+            record.result.status = "timeout"
+            return record
+        try:
+            return Record.from_dict(json.loads(out.read_text()))
+        except (OSError, ValueError):
+            tail = "; ".join((process.stderr or process.stdout).strip().splitlines()[-8:])
+            record = op.bench.incomplete(backend, case, device, f"worker exit {process.returncode}: {tail}")
+            record.result.status = "crash"
+            return record
+    finally:
+        out.unlink(missing_ok=True)
+
+
+def cmd_run_case(args: argparse.Namespace) -> None:
+    """One case, one process: the isolated half of `run`. Not meant to be called directly."""
+    op = KERNELS[args.op]
+    record = op.bench.run_case(args.impl, Case.from_config(json.loads(args.case)), args.device, args.reps)
+    Path(args.out).write_text(json.dumps(record.to_dict(), sort_keys=True))
 
 
 def _publish(records: list[Record]) -> None:
@@ -107,13 +177,14 @@ def _append(path: Path, record: Record) -> None:
 
 def cmd_run(args: argparse.Namespace) -> None:
     args.device = _target_device(args)
-    work = _work(args.ops, args.backend, args.limit)
+    work = _work(args.ops, args.backend, args.limit, args.only)
     if args.shard:
         index, count = args.shard
         work = work[index * len(work) // count : (index + 1) * len(work) // count]
     if not work:
         raise SystemExit("no matching non-torch backend cases")
-    print(f"{len(work)} case-backend pairs, {args.reps} reps each")
+    isolation = "in-process" if args.in_process else f"{args.timeout}s/case worker"
+    print(f"{len(work)} case-backend pairs, {args.reps} reps each ({isolation})")
     out = Path(args.out) if args.out else None
     if out:
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -124,10 +195,13 @@ def cmd_run(args: argparse.Namespace) -> None:
     records = []
     poisoned = False
     for index, (op, backend, case) in enumerate(work):
-        try:
-            record = op.bench.run_case(backend, case, args.device, args.reps)
-        except Exception as error:
-            record = op.bench.incomplete(backend, case, args.device, f"{type(error).__name__}: {error}")
+        if args.in_process:
+            try:
+                record = op.bench.run_case(backend, case, args.device, args.reps)
+            except Exception as error:
+                record = op.bench.incomplete(backend, case, args.device, f"{type(error).__name__}: {error}")
+        else:
+            record = _isolated(op, backend, case, args.device, args.reps, args.timeout)
         records.append(record)
         if out:
             _append(out, record)
@@ -149,7 +223,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     if not out:
         _publish(records)
     failures = [
-        record for record in records if record.result.status in ("fail", "crash", "error") or record.result.bench_error
+        record
+        for record in records
+        if record.result.status in ("fail", "crash", "error", "timeout") or record.result.bench_error
     ]
     for record in failures[:20]:
         result = record.result
@@ -270,7 +346,7 @@ def cmd_map(args: argparse.Namespace) -> None:
 
 
 def cmd_submit(args: argparse.Namespace) -> None:
-    total = len(_work(args.ops, limit=args.limit))
+    total = len(_work(args.ops, limit=args.limit, only=args.only))
     if not total:
         raise SystemExit("no matching non-torch backend cases")
     shards = min(args.array, total)
@@ -284,6 +360,8 @@ def cmd_submit(args: argparse.Namespace) -> None:
         reps=args.reps,
         limit=f"--limit {args.limit}" if args.limit else "",
         hardware=f"--hardware {shlex.quote(args.hardware)}" if args.hardware else "",
+        timeout=args.timeout,
+        only=f"--only {shlex.quote(str(Path(args.only).resolve()))}" if args.only else "",
         shards=shards,
         shard_dir=shlex.quote(str(shard_dir)),
     )
@@ -326,7 +404,19 @@ def main() -> None:
     run.add_argument("--limit", type=_positive, help="subsample the grid to at most N cases per op")
     run.add_argument("--shard", type=_shard, help="I/K: run the I-th of K deterministic slices")
     run.add_argument("--out", help="write raw rows to this JSONL instead of the reports store")
+    run.add_argument("--timeout", type=_positive, default=30, help="seconds per case worker before it is killed")
+    run.add_argument("--in-process", action="store_true", help="run cases without a worker: no timeout, crashes end the run")
+    run.add_argument("--only", help="restrict to the op/impl/case rows recorded in this JSONL (e.g. a shard file)")
     run.set_defaults(fn=cmd_run)
+
+    run_case = sub.add_parser("run-case", help=argparse.SUPPRESS)
+    run_case.add_argument("--op", required=True)
+    run_case.add_argument("--impl", required=True)
+    run_case.add_argument("--case", required=True, help="JSON case config")
+    run_case.add_argument("--device", default="cuda")
+    run_case.add_argument("--reps", type=_positive, default=10)
+    run_case.add_argument("--out", required=True)
+    run_case.set_defaults(fn=cmd_run_case)
 
     merge = sub.add_parser("merge", help="fold shard JSONL files into the reports store")
     merge.add_argument("--expect", type=_positive, help="fail unless this many shard files exist")
@@ -347,6 +437,8 @@ def main() -> None:
     submit.add_argument("--limit", type=_positive, help="subsample the grid to at most N cases per op")
     submit.add_argument("--qos", default=None, help="slurm QoS for the array and merge jobs (default: cluster default)")
     submit.add_argument("--time", default="2:00:00")
+    submit.add_argument("--timeout", type=_positive, default=30, help="passed to each array task: seconds per case worker")
+    submit.add_argument("--only", help="passed to each array task: restrict to the rows recorded in this JSONL")
     submit.add_argument("--dry-run", action="store_true")
     submit.set_defaults(fn=cmd_submit)
 

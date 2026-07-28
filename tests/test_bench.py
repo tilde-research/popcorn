@@ -1,6 +1,8 @@
 import ast
 import importlib
+import json
 import math
+import subprocess
 from argparse import Namespace
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -12,7 +14,7 @@ from torch import Tensor
 
 import popcorn
 from popcorn.bench import Case, Gauge, compare
-from popcorn.bench.__main__ import _target_device, cmd_merge, cmd_run, cmd_submit
+from popcorn.bench.__main__ import _isolated, _target_device, _work, cmd_merge, cmd_run, cmd_submit
 from popcorn.bench.grid import cases, make_inputs
 from popcorn.bench.model import Environment, Record, Result
 from popcorn.bench.readme import matrix
@@ -250,8 +252,92 @@ def test_empty_cli_work_is_an_error(tmp_path):
                 device="cpu",
                 hardware=None,
                 out=None,
+                timeout=30,
+                in_process=True,
+                only=None,
             )
         )
+
+
+def _selector(path, op, impl, *grid_cases):
+    """A JSONL of report rows, as `run --only` consumes it."""
+    rows = []
+    for case in grid_cases:
+        record = _record(case_id=case.case_id)
+        record.op, record.impl, record.config = op, impl, case.config()
+        rows.append(json.dumps(record.to_dict(), sort_keys=True))
+    path.write_text("\n".join(rows) + "\n")
+    return str(path)
+
+
+def test_only_rebuilds_exactly_the_recorded_cases(tmp_path):
+    op = popcorn.KERNELS["swiglu"]
+    chosen, skipped = cases(op, limit=4)[:2]
+    selector = _selector(tmp_path / "selected.jsonl", op.name, "popcorn", chosen)
+
+    work = _work([op.name], backend="popcorn", only=selector)
+    assert [case.case_id for _, _, case in work] == [chosen.case_id]
+    assert skipped.case_id not in {case.case_id for _, _, case in work}
+
+
+def test_only_rebuilds_cases_the_current_grid_no_longer_samples(tmp_path):
+    """A recorded row carries its own config, so a shifted grid sample cannot drop it."""
+    op = popcorn.KERNELS["swiglu"]
+    unsampled = cases(op, limit=400)[-1]
+    assert unsampled.case_id not in {case.case_id for case in cases(op, limit=4)}
+    selector = _selector(tmp_path / "selected.jsonl", op.name, "popcorn", unsampled)
+
+    work = _work([op.name], backend="popcorn", only=selector)
+    assert [case.case_id for _, _, case in work] == [unsampled.case_id]
+
+
+def test_only_reports_unrunnable_selectors(tmp_path, capsys):
+    op = popcorn.KERNELS["swiglu"]
+    case = cases(op, limit=4)[0]
+    selector = _selector(tmp_path / "selected.jsonl", op.name, "not-an-impl", case)
+
+    assert _work([op.name], only=selector) == []
+    out = capsys.readouterr().out
+    assert "0 of 1" in out and "unavailable" in out  # never silently dropped
+
+
+def test_only_rejects_a_limit(tmp_path):
+    with pytest.raises(SystemExit, match="--limit does not apply"):
+        _work([], limit=4, only=str(tmp_path / "selected.jsonl"))
+
+
+def test_only_still_honours_a_named_op(tmp_path):
+    op = popcorn.KERNELS["swiglu"]
+    selector = _selector(tmp_path / "selected.jsonl", op.name, "popcorn", cases(op, limit=4)[0])
+    assert _work(["rms_norm"], only=selector) == []
+    assert len(_work(["swiglu"], only=selector)) == 1
+
+
+def test_isolated_case_records_a_timeout_without_killing_the_run(monkeypatch):
+    op = popcorn.KERNELS["rms_norm"]
+    case = cases(op, limit=1)[0]
+
+    def hang(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="run-case", timeout=kwargs.get("timeout", 0))
+
+    monkeypatch.setattr(subprocess, "run", hang)
+    record = _isolated(op, "torch", case, "cpu", reps=1, timeout=7)
+    assert record.result.status == "timeout"
+    assert record.result.reason == "no result within 7s"
+
+
+def test_isolated_case_records_a_crash_when_the_worker_dies(monkeypatch):
+    op = popcorn.KERNELS["rms_norm"]
+    case = cases(op, limit=1)[0]
+
+    def die(*args, **kwargs):
+        return subprocess.CompletedProcess(args=[], returncode=-11, stdout="", stderr="Segmentation fault")
+
+    monkeypatch.setattr(subprocess, "run", die)
+    record = _isolated(op, "torch", case, "cpu", reps=1, timeout=7)
+    assert record.result.status == "crash"
+    assert "worker exit -11" in record.result.reason
+    assert "Segmentation fault" in record.result.reason
 
 
 def test_target_device_gates_on_the_live_hardware_name():
@@ -276,6 +362,8 @@ def test_slurm_submit_dry_run_builds_a_sharded_script(tmp_path, monkeypatch):
             hardware=None,
             time="00:10:00",
             dry_run=True,
+            timeout=30,
+            only=None,
         )
     )
     script = (tmp_path / "logs" / "popcorn_bench.slurm").read_text()
@@ -284,12 +372,25 @@ def test_slurm_submit_dry_run_builds_a_sharded_script(tmp_path, monkeypatch):
     assert 'TRITON_CACHE_DIR="/tmp/triton_' in script
     assert '--shard "$SLURM_ARRAY_TASK_ID/2"' in script
     assert "--hardware" not in script  # unset gate leaves array tasks unconstrained
+    assert "--timeout 30" in script  # array tasks isolate each case behind a deadline
+    assert "--only" not in script
 
 
 def test_slurm_submit_includes_qos_when_given(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cmd_submit(
-        Namespace(ops=["rms_norm"], array=1, reps=1, limit=1, qos="batch", hardware=None, time="00:10:00", dry_run=True)
+        Namespace(
+            ops=["rms_norm"],
+            array=1,
+            reps=1,
+            limit=1,
+            qos="batch",
+            hardware=None,
+            time="00:10:00",
+            dry_run=True,
+            timeout=30,
+            only=None,
+        )
     )
     script = (tmp_path / "logs" / "popcorn_bench.slurm").read_text()
     assert "#SBATCH --qos=batch\n" in script
@@ -297,7 +398,20 @@ def test_slurm_submit_includes_qos_when_given(tmp_path, monkeypatch):
 
 def test_slurm_submit_forwards_the_hardware_gate(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    cmd_submit(Namespace(ops=["rms_norm"], array=1, reps=1, limit=1, qos=None, hardware="H100", time="1:00", dry_run=True))
+    cmd_submit(
+        Namespace(
+            ops=["rms_norm"],
+            array=1,
+            reps=1,
+            limit=1,
+            qos=None,
+            hardware="H100",
+            time="1:00",
+            dry_run=True,
+            timeout=30,
+            only=None,
+        )
+    )
     assert "--hardware H100" in (tmp_path / "logs" / "popcorn_bench.slurm").read_text()
 
 

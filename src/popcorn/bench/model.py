@@ -38,6 +38,17 @@ class Case:
     def config(self) -> dict[str, Any]:
         return make_config(dict(self.dims), self.batch, self.dtype, dict(self.args), self.present)
 
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> Case:
+        """Rebuild a case from `config()`, for handing one grid point to a worker process."""
+        return cls(
+            tuple(config["dims"].items()),
+            tuple(config["batch"]),
+            getattr(torch, config["dtype"]),
+            tuple(config["args"].items()),
+            frozenset(config["present"]),
+        )
+
 
 @dataclass(slots=True)
 class Gauge:
