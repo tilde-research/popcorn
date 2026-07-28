@@ -18,14 +18,18 @@ function usageSnippet(k: Kernel): string {
   return lines.join('\n');
 }
 
-function profileSnippet(k: Kernel): string {
+function benchmarkSnippet(k: Kernel): string {
   const call = k.params.filter((p) => p.default === undefined).map((p) => p.name).join(', ');
   return [
-    `# validate + benchmark every eligible backend, then route to the fastest`,
-    `out = ${k.name}(${call}, bench=True)`,
+    `from popcorn.bench import report`,
+    `from popcorn.kernels import ${k.name}`,
     '',
-    `# or process-wide: POPCORN_BENCH=1 python train.py`,
-    `print(${k.name})  # signature and per-backend constraints`,
+    `# time every eligible backend against the reference, then print one block each`,
+    `for record in ${k.name}.benchmark(${call}):`,
+    `    report(record)`,
+    '',
+    `# measure and route on first use instead: POPCORN_BENCH=1 python train.py`,
+    `out = ${k.name}(${call}, bench=True)`,
   ].join('\n');
 }
 
@@ -80,7 +84,7 @@ function InfoPane({ k }: { k: Kernel }) {
             <tr className="border-b text-left text-xs text-fd-muted-foreground">
               <th className="py-2 pr-4 font-medium">backend</th>
               <th className="py-2 pr-4 font-medium">source</th>
-              <th className="py-2 font-medium">notes</th>
+              <th className="py-2 font-medium">grad</th>
             </tr>
           </thead>
           <tbody>
@@ -89,23 +93,22 @@ function InfoPane({ k }: { k: Kernel }) {
                 <td className="py-2 pr-4 font-mono font-semibold">{b.name}</td>
                 <td className="py-2 pr-4 font-mono text-xs text-fd-muted-foreground">{b.source ?? 'reference'}</td>
                 <td className="py-2 text-xs text-fd-muted-foreground">
-                  {[
-                    b.forward_only ? 'forward-only' : null,
-                    ...Object.entries(b.supports).map(([dim, constraint]) => `${dim}: ${constraint}`),
-                  ]
-                    .filter(Boolean)
-                    .join(', ') || '—'}
+                  {b.forward_only ? 'forward-only' : 'forward + backward'}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        <Tabs items={['Use it', 'Profile it']}>
+        <Tabs items={['Use it', 'Benchmark it']}>
           <Tab value="Use it">
             <DynamicCodeBlock lang="python" code={usageSnippet(k)} />
           </Tab>
-          <Tab value="Profile it">
-            <DynamicCodeBlock lang="python" code={profileSnippet(k)} />
+          <Tab value="Benchmark it">
+            <DynamicCodeBlock lang="python" code={benchmarkSnippet(k)} />
+            <p className="mt-2 text-xs text-fd-muted-foreground">
+              Each record names its backend; <code className="font-mono">report</code> prints
+              latency, peak memory, and forward error, and returns the text.
+            </p>
           </Tab>
         </Tabs>
       </div>

@@ -215,8 +215,8 @@ Add the project to the Acknowledgement list in [README.md](README.md).
 
 ```bash
 uv run pytest tests -q
-uv run python -m popcorn.bench run [ops...] [--backend NAME] [--device cuda] [--reps 10] [--limit N] [--shard I/K]
-uv run python -m popcorn.bench submit [ops...] [--array 8] [--reps 10] [--limit N] [--qos NAME] [--time 2:00:00] [--dry-run]
+uv run python -m popcorn.bench run [ops...] [--backend NAME] [--device cuda] [--hardware H100] [--reps 10] [--limit N] [--shard I/K]
+uv run python -m popcorn.bench submit [ops...] [--array 8] [--reps 10] [--limit N] [--qos NAME] [--hardware H100] [--time 2:00:00] [--dry-run]
 uv run python -m popcorn.bench view [--user] [--out index.html]
 ```
 
@@ -234,6 +234,8 @@ result = compare(mine, reference, {"x": x, "weight": weight})
 
 `run` executes the op's full grid (shapes x args x dtypes x batch ranks x optional-tensor presence), forward and backward. Correctness is completed before timing; a timing failure is recorded separately and never overwrites a correctness pass. `--reps` controls seeded comparisons and timed repetitions; `--limit` takes one deterministic per-op sample shared by every backend; `--shard I/K` selects one contiguous slice. Rows atomically upsert into `src/popcorn/reports/<op>.jsonl` by exact case, gradient requirement, hardware, Torch version, and backend version. `run` and `merge` regenerate the README badges automatically.
 
+Before any case runs, `run` and `map` pin the target: a bare `--device cuda` resolves to the current index (`cuda:0`), a CUDA request with no visible GPU is an error rather than a silent CPU run, and the resolved device name is printed. Hardware is stamped from that live device, so pass `--hardware H100` to abort when the machine you landed on is not the one you meant to record. `submit` forwards the gate to every array task.
+
 `submit` runs that grid as a slurm array. `--array` caps the shard count, `--qos` and `--time` set scheduling (`--qos` is omitted from the script when unset), and `--dry-run` only writes the script. The dependent merge fails if any shard file is missing. `view` renders the database as a self-contained HTML report; `--user` folds in your local cache rows.
 
 | status | meaning | action |
@@ -247,7 +249,7 @@ result = compare(mine, reference, {"x": x, "weight": weight})
 
 A successful row may also have `bench_error`; correctness remains valid, but the timing must be rerun. In the detail matrix printed by `scripts/update_readme.py`, ✔ means every tested case passes, ✔* means at least one passes while another is gated, failed, or unverified, and ✘ means no case passes.
 
-`op.validate(*args, backend=None, **kwargs)` checks a real call without timing. `op.benchmark(*args, backend=None, **kwargs)` checks and times it. These APIs write `${POPCORN_CACHE_DIR:-${XDG_CACHE_HOME:-~/.cache}/popcorn}/v2/reports` and never modify checked-in reports or the README.
+`op.validate(*args, backend=None, **kwargs)` checks a real call without timing. `op.benchmark(*args, backend=None, **kwargs)` checks and times it. Both return one `Record` per eligible backend, so `popcorn.bench.report(record)` prints a labelled latency, memory, and error block; `record.result` holds the raw status and gauges. These APIs write `${POPCORN_CACHE_DIR:-${XDG_CACHE_HOME:-~/.cache}/popcorn}/v2/reports` and never modify checked-in reports or the README.
 
 Automatic dispatch admits a backend only with an exact pass row or membership in a fitted validity region (derived from report rows). Otherwise the reference serves the call. `POPCORN_BENCH=1` lazily measures and records on first encounter. Map regions with `python -m popcorn.bench map --effort standard`.
 

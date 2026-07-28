@@ -109,7 +109,7 @@ def plan(
     labeled = _labels(records, backend)
     regions = fit((record for record in records if record.backend == backend), op._dims)
     dtype = next((dt for dt in DTYPES if any("float" in kind for spec in op.specs for kind in spec.dtypes)), torch.float32)
-    batch = (2, 3) if any(... in spec.tokens for spec in op.specs) else ()
+    batch = (2048,) if any(... in spec.tokens for spec in op.specs) else ()
     args, present = _default_args(op), frozenset()
     dtype_name = str(dtype).removeprefix("torch.")
     layer = stratum_key(device, grad, dtype_name, args, present, bool(batch))

@@ -65,7 +65,7 @@ def _case(op: Any, tokens: list[str], batch: tuple[int, ...] | None, dtype: torc
         raise SystemExit(f"{op.name}: pass {', '.join(f'{name}=...' for name in sorted(required))} (no tested default)")
     args = tuple((name, overrides[name] if name in overrides else op.arg_pools[name][0]) for name in sorted(op.arg_pools))
     if batch is None:
-        batch = (2, 2048) if any(... in spec.tokens for spec in op.specs) else ()
+        batch = (2048,) if any(... in spec.tokens for spec in op.specs) else ()
     return Case(dims, batch, dtype, args, frozenset(present))
 
 

@@ -9,7 +9,7 @@ from typing import Any
 
 import torch
 
-from popcorn.bench.model import Gauge, Result
+from popcorn.bench.model import Gauge, Record, Result
 
 FLOORS = {torch.float64: 1e-10, torch.float32: 2e-5, torch.float16: 1e-3, torch.bfloat16: 2e-2}
 
@@ -107,11 +107,16 @@ def _measure(fn: Callable[[], Any], device: torch.device | None, repeats: int, w
                     quantiles=[0.2, 0.5, 0.8],
                 )
                 peak = (torch.cuda.max_memory_allocated(device) - base) / 2**20
-            q20, mid, q80 = (quantiles if isinstance(quantiles, list) else [quantiles, quantiles, quantiles])
-            result = {"ms": round(float(mid), 6), "q20_ms": round(float(q20), 6), "q80_ms": round(float(q80), 6)}
-            if peak is not None:
-                result["mem_mb"] = round(peak, 3)
-            return result
+            raw = quantiles if isinstance(quantiles, (list, tuple)) else (quantiles, quantiles, quantiles)
+            q20, mid, q80 = raw[0], raw[1], raw[2]
+            if q20 is None or mid is None or q80 is None:
+                raise TypeError("do_bench returned None quantile")
+            return {
+                "ms": round(float(mid), 6),
+                "q20_ms": round(float(q20), 6),
+                "q80_ms": round(float(q80), 6),
+                "mem_mb": round(peak, 3),
+            }
         except Exception:
             pass
     times = []
@@ -305,3 +310,60 @@ def compare(
         repeats=repeats,
         warmup=warmup,
     )
+
+
+def report(
+    subject: Record | Result,
+    label: str = "",
+    *,
+    mine: str | None = None,
+    reference: str | None = None,
+    assert_rel: float | None = None,
+) -> str:
+    """Pretty-print a `compare` result: latency, peak memory, and forward error.
+
+    >>> report(compare(fast, slow, inputs), "forward", mine="popcorn", reference="baseline")
+    forward    baseline  237.5 ms -> popcorn    6.1 ms   (39.1x)
+               peak        0.77 GB ->      0.77 GB
+               err 0.00e+00 on scale 10.8
+
+    A `Record` from `op.validate` or `op.benchmark` names itself after its backend.
+    """
+    if isinstance(subject, Record):
+        result, label = subject.result, label or subject.backend
+        mine, reference = mine or subject.backend, reference or "torch"
+    else:
+        result, mine, reference = subject, mine or "mine", reference or "ref"
+    width = max(len(label), 8)
+    lines: list[str] = []
+    bench = result.bench
+    if result.benchmarked and "fwd_ms" in bench and "ref_fwd_ms" in bench:
+        speed = bench["ref_fwd_ms"] / bench["fwd_ms"] if bench["fwd_ms"] else float("inf")
+        lines.append(
+            f"{label:{width}s} {reference} {bench['ref_fwd_ms']:8.1f} ms -> {mine} {bench['fwd_ms']:6.1f} ms   ({speed:.1f}x)"
+        )
+        if "fwd_mem_mb" in bench and "ref_fwd_mem_mb" in bench:
+            lines.append(
+                f"{'':{width}s} peak     {bench['ref_fwd_mem_mb'] / 1024:8.2f} GB -> {bench['fwd_mem_mb'] / 1024:9.2f} GB"
+            )
+        if "bwd_ms" in bench and "ref_bwd_ms" in bench:
+            bwd_speed = bench["ref_bwd_ms"] / bench["bwd_ms"] if bench["bwd_ms"] else float("inf")
+            lines.append(
+                f"{'':{width}s} bwd      {bench['ref_bwd_ms']:8.1f} ms -> {bench['bwd_ms']:6.1f} ms   ({bwd_speed:.1f}x)"
+            )
+    elif result.bench_error:
+        lines.append(f"{label:{width}s} {result.status}: {result.bench_error}")
+    else:
+        lines.append(f"{label:{width}s} {result.status}" + (f": {result.reason}" if result.reason else ""))
+
+    gauge = result.fwd.get("out0")
+    if gauge is not None:
+        lines.append(f"{'':{width}s} err {gauge.err:.2e} on scale {gauge.scale:.1f}")
+        if assert_rel is not None and gauge.scale > 0:
+            rel = gauge.err / gauge.scale
+            if rel >= assert_rel:
+                raise AssertionError(f"{label or 'compare'}: relative error {rel:.2e} >= {assert_rel:.2e}")
+
+    text = "\n".join(lines)
+    print(text)
+    return text

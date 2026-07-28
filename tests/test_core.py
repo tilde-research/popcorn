@@ -17,6 +17,7 @@ from packaging.specifiers import SpecifierSet
 from torch import Tensor
 
 import popcorn.core.sources
+from popcorn.bench import report
 from popcorn.bench.model import Case, Record
 from popcorn.bench.store import write
 from popcorn import (
@@ -396,8 +397,7 @@ class TestRegistration:
                 assert hasattr(returned, "dim_str"), f"{op.name}: tensor returns use jaxtyping shapes"
             controls = list(op.__signature__.parameters.values())[len(op._signature.parameters) :]
             assert [(control.name, control.kind, control.default) for control in controls] == [
-                (name, inspect.Parameter.KEYWORD_ONLY, None)
-                for name in ("backend", "bench", "validate", "unsafe")
+                (name, inspect.Parameter.KEYWORD_ONLY, None) for name in ("backend", "bench", "validate", "unsafe")
             ], f"{op.name}: __signature__ must expose the reference params plus the dispatch controls"
 
     def test_kernel_doc_format(self):
@@ -583,10 +583,12 @@ class TestEnvelope:
         from popcorn.core import dims as dims_mod
 
         monkeypatch.setitem(dims_mod.DIMS, "D", {2, 4})
+        monkeypatch.setitem(dims_mod.DIMS, "...", {0, 1, 2})
         op = make_op()
         full = cases(op)
-        assert len(full) == 2 * 2 * 2 * 3 * 3  # D x flag x bias presence x dtypes x batches
+        assert len(full) == 2 * 2 * 2 * 3 * 3  # D x flag x bias presence x dtypes x ...
         assert len({c.case_id for c in full}) == len(full)
+        assert {c.batch for c in full} == {(), (1,), (2,)}
         limited = cases(op, limit=10)
         assert len(limited) == 10
         # Wide pools must not build the cartesian list when sampling.
@@ -945,8 +947,8 @@ class TestTuning:
         op = make_op()
         op.register("alt")(lambda x, weight, flag: x + 1)
         with caplog.at_level(logging.INFO, logger="popcorn.bench"):
-            results = op.validate(torch.zeros(2, 4))
-        assert [result.status for result in results] == ["pass"]
+            records = op.validate(torch.zeros(2, 4))
+        assert [(record.backend, record.result.status) for record in records] == [("alt", "pass")]
         assert any("op:alt [pass]" in message for message in caplog.messages)
         assert any("recorded 1 row(s)" in message for message in caplog.messages)
 
@@ -956,8 +958,8 @@ class TestTuning:
         x = torch.zeros(2, 4)
         op(x)
         assert op.tuner._selected
-        [result] = op.validate(x, backend="alt")
-        assert result.status == "fail"
+        [record] = op.validate(x, backend="alt")
+        assert record.backend == "alt" and record.result.status == "fail"
         assert not op.tuner._selected
         assert (self.cache / "op.jsonl").exists()
         assert torch.equal(op(x), torch.ones_like(x))
@@ -965,9 +967,11 @@ class TestTuning:
     def test_benchmark_records_correctness_and_timings(self):
         op = make_op()
         op.register("alt")(lambda x, weight, flag: x + 1)
-        [result] = op.benchmark(torch.zeros(2, 4), backend="alt")
-        assert result.status == "pass" and result.benchmarked
+        [record] = op.benchmark(torch.zeros(2, 4), backend="alt")
+        result = record.result
+        assert record.backend == "alt" and result.status == "pass" and result.benchmarked
         assert result.bench["fwd_ms"] > 0 and result.bench["ref_fwd_ms"] > 0
+        assert report(record).startswith("alt")
 
     def test_bench_mode_routes_around_new_failure(self, monkeypatch):
         op = make_op()

@@ -4,7 +4,7 @@ per-backend matrix. Runs nothing; see bench_hardware.py to produce rows."""
 
 import popcorn.kernels  # noqa: F401
 from popcorn import KERNELS
-from popcorn.bench.report import refresh
+from popcorn.bench.readme import refresh
 
 
 def main() -> None:

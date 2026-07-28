@@ -42,6 +42,8 @@ def test_dim_names_are_canonical():
     from popcorn.core.dims import DIMS
 
     used = set().union(*(op._dims for op in KERNELS.values()))
+    if any(... in spec.tokens for op in KERNELS.values() for spec in op.specs):
+        used.add("...")
     assert used - DIMS.keys() == set(), f"undeclared dim names: {sorted(used - DIMS.keys())}"
     assert DIMS.keys() - used == set(), f"unused vocabulary entries: {sorted(DIMS.keys() - used)}"
 

@@ -7,8 +7,17 @@ Validation compares eligible implementations with higher-precision reference res
 checks forward outputs and, when inputs require gradients, backward results.
 
 ```python
-results = rms_norm.validate(x, weight)
-assert all(result.status == "pass" for result in results)
+records = rms_norm.validate(x, weight)
+assert all(record.result.status == "pass" for record in records)
+```
+
+Each record names its backend. To print one labelled block per implementation:
+
+```python
+from popcorn.bench import report
+
+for record in rms_norm.validate(x, weight):
+    report(record)
 ```
 
 Results are stored per case, device, PyTorch version, backend version, and gradient mode,

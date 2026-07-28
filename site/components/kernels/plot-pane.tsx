@@ -12,6 +12,7 @@ import {
   defaultSelection,
   filterRows,
   fmt,
+  hardwareLabel,
   mode,
   tokens,
   type Pass,
@@ -29,12 +30,15 @@ function Segmented({
   value,
   onChange,
   disabled = [],
+  labels,
   mono = false,
 }: {
   options: string[];
   value: string;
   onChange: (next: string) => void;
   disabled?: string[];
+  /** Display text keyed by option value; defaults to the value itself. */
+  labels?: Record<string, string>;
   mono?: boolean;
 }) {
   return (
@@ -44,11 +48,12 @@ function Segmented({
           key={option}
           disabled={disabled.includes(option)}
           onClick={() => onChange(option)}
+          title={labels?.[option] && labels[option] !== option ? option : undefined}
           className={`px-2.5 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
             option === value ? 'bg-fd-primary text-fd-primary-foreground' : 'bg-fd-card hover:bg-fd-accent'
           }`}
         >
-          {option}
+          {labels?.[option] ?? option}
         </button>
       ))}
     </div>
@@ -241,9 +246,14 @@ export function PlotPane({ kernels }: { kernels: Kernel[] }) {
             <Segmented options={controls.dtypes} value={selection.dtype} onChange={(dtype) => patch({ dtype })} mono />
           </Control>
         )}
-        {controls.devices.length > 1 && (
-          <Control label="device" mono={false}>
-            <Segmented options={controls.devices} value={selection.device} onChange={(device) => patch({ device })} />
+        {controls.devices.length > 0 && (
+          <Control label="hardware" mono={false}>
+            <Segmented
+              options={controls.devices}
+              labels={Object.fromEntries(controls.devices.map((device) => [device, hardwareLabel(device)]))}
+              value={selection.device}
+              onChange={(device) => patch({ device })}
+            />
           </Control>
         )}
       </div>

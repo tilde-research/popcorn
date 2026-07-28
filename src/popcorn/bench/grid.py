@@ -39,8 +39,8 @@ GRID = (
     131072,
     1048576,
 )
-BATCHES = ((), (2, 3), (2, 2048))
 DTYPES = (torch.float32, torch.float16, torch.bfloat16)
+ELLIPSIS = "..."
 
 # Refuse to materialize a full cartesian product past this; pass `limit=`.
 _MAX_FULL_GRID = 100_000
@@ -64,21 +64,22 @@ def _unrank(index: int, sizes: Sequence[int]) -> list[int]:
 
 
 def cases(op: Any, limit: int | None = None) -> list[Case]:
-    """Sample the dim × arg × presence × dtype × batch product.
+    """Sample the dim (incl. `...` when present) × arg × presence × dtype product.
 
     Never builds the full cartesian list when `limit` is set — ranks into the
-    product space instead — so wide `DIMS` pools stay cheap.
+    product space instead — so wide `DIMS` pools stay cheap. Annotation `...`
+    is one leading extent from `DIMS["..."]` (0 → `batch=()`, else `(n,)`).
     """
     if missing := [name for name, pool in op.arg_pools.items() if pool is None]:
         raise TypeError(f"{op.name}: arguments {missing} need test_args, a default, or a Literal annotation")
-    dim_names = sorted(op._dims)
+    has_ellipsis = any(... in spec.tokens for spec in op.specs)
+    dim_names = sorted(op._dims | ({ELLIPSIS} if has_ellipsis else set()))
     dim_pools = [_dim_pool(op, name) for name in dim_names]
     arg_names = [name for name, pool in sorted(op.arg_pools.items()) if pool is not None]
     arg_pools = [list(op.arg_pools[name]) for name in arg_names]
     opt_names = sorted(spec.param for spec in op.specs if spec.optional)
     dtypes = list(DTYPES if any("float" in dtype for spec in op.specs for dtype in spec.dtypes) else (torch.float32,))
-    batches = list(BATCHES if any(... in spec.tokens for spec in op.specs) else ((),))
-    sizes = [len(pool) for pool in dim_pools] + [len(pool) for pool in arg_pools] + [2] * len(opt_names) + [len(dtypes), len(batches)]
+    sizes = [len(pool) for pool in dim_pools] + [len(pool) for pool in arg_pools] + [2] * len(opt_names) + [len(dtypes)]
     if any(size == 0 for size in sizes):
         return []
     total = math.prod(sizes)
@@ -90,14 +91,16 @@ def cases(op: Any, limit: int | None = None) -> list[Case]:
     def build(index: int) -> Case:
         coords = _unrank(index, sizes)
         cursor = 0
-        dims = [(name, pool[coords[cursor + offset]]) for offset, (name, pool) in enumerate(zip(dim_names, dim_pools))]
+        values = {name: pool[coords[cursor + offset]] for offset, (name, pool) in enumerate(zip(dim_names, dim_pools))}
         cursor += len(dim_names)
+        leading = values.pop(ELLIPSIS, None)
+        batch = () if leading is None or leading == 0 else (leading,)
+        dims = [(name, values[name]) for name in sorted(values)]
         args = [(name, pool[coords[cursor + offset]]) for offset, (name, pool) in enumerate(zip(arg_names, arg_pools))]
         cursor += len(arg_names)
         present = frozenset(name for offset, name in enumerate(opt_names) if coords[cursor + offset])
         cursor += len(opt_names)
         dtype = dtypes[coords[cursor]]
-        batch = batches[coords[cursor + 1]]
         return Case(tuple(dims), batch, dtype, tuple(args), present)
 
     return [build(index) for index in indices]

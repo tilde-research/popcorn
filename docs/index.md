@@ -33,6 +33,7 @@ Some frequently used terms are overloaded; Popcorn uses them precisely:
 - [Benchmarking](./benchmarking.md) — record timings and route on data
 - [Tuning](./tuning.md) — select one implementation for a region of shapes
 - [torch.compile](./torch-compile.md) — route compiled models through Popcorn
+- [Optimization loop](./loop.md) — iterate on a candidate kernel with crash-isolated evals
 
 Kernel cards with math, backends, and measured performance live in the
 [kernel explorer](https://tilde-research.github.io/popcorn/kernels/).

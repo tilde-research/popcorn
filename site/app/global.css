@@ -2,6 +2,12 @@
 @import 'fumadocs-ui/css/neutral.css';
 @import 'fumadocs-ui/css/preset.css';
 
+:root {
+  --pc-butter: #e0a84a;
+  --pc-ink: #0a0a0a;
+  --pc-paper: #f4f4f2;
+}
+
 html {
   scrollbar-gutter: stable;
 }
@@ -9,4 +15,168 @@ html {
 html > body[data-scroll-locked] {
   margin-right: 0px !important;
   --removed-body-scroll-bar-size: 0px !important;
+}
+
+/* Shared site header — fixed slots so controls never reflow between pages */
+.pc-site-header {
+  --fd-layout-width: 1400px;
+  height: 3.5rem;
+  background: color-mix(in oklab, var(--color-fd-background) 80%, transparent);
+}
+
+/* Docs notebook grid otherwise pinches the header — span full width like home/kernels */
+#nd-subnav.pc-site-header {
+  grid-area: unset;
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+.pc-site-header .nd-nav-title {
+  display: inline-flex;
+  align-items: center;
+  width: 4.5rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+}
+
+.pc-search-trigger {
+  width: 11.5rem;
+  flex-shrink: 0;
+  border-radius: 0.5rem;
+}
+
+.pc-theme-switch {
+  flex-shrink: 0;
+  height: 2.25rem;
+}
+
+.pc-icon-slot {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+/* One search control at a time — don't rely on utility purge for this */
+@media (min-width: 768px) {
+  .pc-site-header [data-search] {
+    display: none !important;
+  }
+}
+
+@media (max-width: 767.98px) {
+  .pc-site-header [data-search-full] {
+    display: none !important;
+  }
+}
+
+/* Cinema home stage — keep nav readable even if site theme is light */
+.pc-home {
+  --pc-stage: #050505;
+  --color-fd-background: #050505;
+  --color-fd-foreground: #f5f5f4;
+  --color-fd-muted-foreground: #a8a29e;
+  --color-fd-popover: #0a0a0a;
+  --color-fd-accent: #1a1a1a;
+  --color-fd-border: rgb(255 255 255 / 0.1);
+  background: var(--pc-stage);
+  color: #f5f5f4;
+}
+
+.pc-home #nd-nav {
+  color: #f5f5f4;
+}
+
+.pc-home #nd-nav a,
+.pc-home #nd-nav button {
+  color: inherit;
+}
+
+.pc-fade-up {
+  animation: pc-fade-up 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.pc-fade-up-delay {
+  animation: pc-fade-up 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both;
+}
+
+.pc-fade-up-delay-2 {
+  animation: pc-fade-up 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.24s both;
+}
+
+@keyframes pc-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pc-diff-line {
+  animation: pc-diff-line 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes pc-diff-line {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pc-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(6px, -10px, 0) rotate(3deg);
+  }
+}
+
+@keyframes pc-pop {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.22;
+  }
+  40% {
+    transform: scale(1.08);
+    opacity: 0.38;
+  }
+  55% {
+    transform: scale(0.98);
+    opacity: 0.28;
+  }
+}
+
+.pc-kernel {
+  animation: pc-drift var(--pc-dur, 14s) ease-in-out infinite;
+  animation-delay: var(--pc-delay, 0s);
+}
+
+.pc-kernel-pop {
+  animation:
+    pc-drift var(--pc-dur, 14s) ease-in-out infinite,
+    pc-pop var(--pc-pop-dur, 7s) ease-in-out infinite;
+  animation-delay: var(--pc-delay, 0s), var(--pc-pop-delay, 0s);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pc-fade-up,
+  .pc-fade-up-delay,
+  .pc-fade-up-delay-2,
+  .pc-diff-line,
+  .pc-kernel,
+  .pc-kernel-pop {
+    animation: none !important;
+  }
 }

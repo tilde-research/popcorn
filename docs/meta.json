@@ -8,6 +8,7 @@
     "validation",
     "benchmarking",
     "tuning",
-    "torch-compile"
+    "torch-compile",
+    "loop"
   ]
 }

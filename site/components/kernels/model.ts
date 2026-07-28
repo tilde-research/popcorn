@@ -30,6 +30,31 @@ export function fmt(value: unknown): string {
   return String(value);
 }
 
+/** Short chip label for a recorded `device` string (full name stays the filter key). */
+const HARDWARE_TAGS = [
+  'B200',
+  'H200',
+  'H100',
+  'A100',
+  'A10',
+  'L40S',
+  'L40',
+  'V100',
+  'MI355',
+  'MI300',
+  'MI250',
+] as const;
+
+export function hardwareLabel(device: string): string {
+  const upper = device.toUpperCase();
+  for (const tag of HARDWARE_TAGS) {
+    if (upper.includes(tag)) return tag;
+  }
+  const rtx = device.match(/((?:RTX|GTX)\s*\d+\s*\w*)/i);
+  if (rtx) return rtx[1].replace(/\s+/g, ' ');
+  return device.replace(/^NVIDIA\s+/i, '').replace(/\s+\d+GB\b.*$/i, '').trim() || device;
+}
+
 /** Tokens processed by one call: batch shape x token-carrying dims. */
 const TOKEN_DIMS = new Set(['batch', 'seq', 'total', 'tokens', 'resp', 'response']);
 

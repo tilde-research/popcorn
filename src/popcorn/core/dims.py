@@ -11,8 +11,10 @@ are extents.
 Pools are production-derived: dense and adversarial on the short end (tile±1,
 powers of two), then sparse through lengths and widths that show up in real
 checkpoints (Llama 3.1, Qwen3, Mistral/Mixtral, Gemma, DeepSeek) and today's
-long-context windows (128K–1M baseline, 2M–4M frontier). Per-op pool overrides
-are not supported — validity is learned from report rows via `bench map`.
+long-context windows (128K–1M baseline, 2M–4M frontier). The `"..."` entry is
+the leading extent for variadic annotations (rank-1 in the grid for now).
+Per-op pool overrides are not supported — validity is learned from report rows
+via `bench map`.
 """
 
 from popcorn.core.spaces import Range, Space
@@ -77,6 +79,10 @@ _HEAD_DIM = {16, 32, 48, 64, 80, 96, 128, 192, 256}
 _VOCAB = Range(2, 4096) | {32_000, 32_768, 50_257, 50_304, 128_256, 151_936, 152_064, 256_000}
 
 DIMS: dict[str, Space | set[int] | None] = {
+    # Variadic leading extent for annotation `...`. Rank-1 for now: grid emits
+    # `batch=()` when 0, else `batch=(n,)`. Multi-axis `...` still validates at
+    # call time; only the grid sampler is 1-D.
+    "...": _SEQ | {0},
     # data layout
     "batch": {1, 2, 4, 8, 16, 32, 64},
     "seq": _SEQ,

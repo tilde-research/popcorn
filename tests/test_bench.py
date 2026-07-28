@@ -12,10 +12,10 @@ from torch import Tensor
 
 import popcorn
 from popcorn.bench import Case, Gauge, compare
-from popcorn.bench.__main__ import cmd_merge, cmd_run, cmd_submit
+from popcorn.bench.__main__ import _target_device, cmd_merge, cmd_run, cmd_submit
 from popcorn.bench.grid import cases, make_inputs
 from popcorn.bench.model import Environment, Record, Result
-from popcorn.bench.report import matrix
+from popcorn.bench.readme import matrix
 from popcorn.bench.store import read, write
 from popcorn.bench.viewer import render
 from popcorn.core import Dispatcher
@@ -98,6 +98,23 @@ def test_benchmark_error_preserves_correctness(monkeypatch):
     assert result.status == "pass"
     assert result.bench_error == "RuntimeError: timer failed"
     assert not result.benchmarked
+
+
+def test_report_formats_bench_and_error(capsys):
+    from popcorn.bench import report
+    from popcorn.bench.model import Gauge, Result
+
+    result = Result(
+        status="pass",
+        benchmarked=True,
+        bench={"fwd_ms": 1.0, "ref_fwd_ms": 4.0, "fwd_mem_mb": 512.0, "ref_fwd_mem_mb": 1024.0},
+        fwd={"out0": Gauge(err=0.0, scale=1.0)},
+    )
+    text = report(result, "forward", mine="popcorn", reference="baseline", assert_rel=0.02)
+    assert "4.0 ms" in text and "1.0 ms" in text and "(4.0x)" in text
+    assert "0.50 GB" in text and "1.00 GB" in text
+    assert "err 0.00e+00" in text
+    assert "forward" in capsys.readouterr().out
 
 
 def test_non_finite_errors_fail():
@@ -227,9 +244,20 @@ def test_empty_cli_work_is_an_error(tmp_path):
                 shard=None,
                 reps=1,
                 device="cpu",
+                hardware=None,
                 out=None,
             )
         )
+
+
+def test_target_device_gates_on_the_live_hardware_name():
+    with pytest.raises(SystemExit, match="does not match"):
+        _target_device(Namespace(device="cpu", hardware="H100"))
+    with pytest.raises(SystemExit, match="invalid --device"):
+        _target_device(Namespace(device="not-a-device", hardware=None))
+    assert _target_device(Namespace(device="cpu", hardware=None)) == "cpu"
+    if torch.cuda.is_available():
+        assert _target_device(Namespace(device="cuda", hardware=None)) == f"cuda:{torch.cuda.current_device()}"
 
 
 def test_slurm_submit_dry_run_builds_a_sharded_script(tmp_path, monkeypatch):
@@ -241,6 +269,7 @@ def test_slurm_submit_dry_run_builds_a_sharded_script(tmp_path, monkeypatch):
             reps=1,
             limit=1,
             qos=None,
+            hardware=None,
             time="00:10:00",
             dry_run=True,
         )
@@ -250,13 +279,22 @@ def test_slurm_submit_dry_run_builds_a_sharded_script(tmp_path, monkeypatch):
     assert "--qos" not in script  # unset QoS leaves the cluster default
     assert 'TRITON_CACHE_DIR="/tmp/triton_' in script
     assert '--shard "$SLURM_ARRAY_TASK_ID/2"' in script
+    assert "--hardware" not in script  # unset gate leaves array tasks unconstrained
 
 
 def test_slurm_submit_includes_qos_when_given(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    cmd_submit(Namespace(ops=["rms_norm"], array=1, reps=1, limit=1, qos="batch", time="00:10:00", dry_run=True))
+    cmd_submit(
+        Namespace(ops=["rms_norm"], array=1, reps=1, limit=1, qos="batch", hardware=None, time="00:10:00", dry_run=True)
+    )
     script = (tmp_path / "logs" / "popcorn_bench.slurm").read_text()
     assert "#SBATCH --qos=batch\n" in script
+
+
+def test_slurm_submit_forwards_the_hardware_gate(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cmd_submit(Namespace(ops=["rms_norm"], array=1, reps=1, limit=1, qos=None, hardware="H100", time="1:00", dry_run=True))
+    assert "--hardware H100" in (tmp_path / "logs" / "popcorn_bench.slurm").read_text()
 
 
 def test_production_benchmark_modules_have_no_local_imports():

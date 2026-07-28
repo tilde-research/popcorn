@@ -15,9 +15,10 @@ from popcorn import KERNELS
 from popcorn.bench.grid import cases
 from popcorn.bench.model import Case, Record
 from popcorn.bench.plan import EFFORT, plan
-from popcorn.bench.report import refresh
+from popcorn.bench.readme import refresh
 from popcorn.bench.store import BUNDLED_REPORTS, Store, read, read_file, user_reports, write
 from popcorn.bench.viewer import render
+from popcorn.core.config import device_name
 from popcorn.core.dispatcher import Dispatcher
 
 SBATCH = """\
@@ -36,9 +37,11 @@ cd "${{SLURM_SUBMIT_DIR:-$(pwd)}}"
 export TRITON_CACHE_DIR="/tmp/triton_${{SLURM_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}"
 mkdir -p "$TRITON_CACHE_DIR"
 
-{python} -m popcorn.bench run {ops} --reps {reps} {limit} \
+{python} -m popcorn.bench run {ops} --reps {reps} {limit} {hardware} \
     --shard "$SLURM_ARRAY_TASK_ID/{shards}" --out {shard_dir}/"$SLURM_ARRAY_TASK_ID".jsonl
 """
+
+HARDWARE_HELP = "fail unless the resolved device name contains this substring (e.g. H100)"
 
 
 def _positive(value: str) -> int:
@@ -56,6 +59,28 @@ def _shard(value: str) -> tuple[int, int]:
     if count < 1 or not 0 <= index < count:
         raise argparse.ArgumentTypeError("must satisfy 0 <= I < K")
     return index, count
+
+
+def _target_device(args: argparse.Namespace) -> str:
+    """Pin the device and confirm it is the hardware the run claims to target.
+
+    A bare `cuda` follows whichever index happens to be current, and falls back to a CPU
+    name when no GPU is visible, so rows could be stamped with hardware nobody intended.
+    """
+    try:
+        device = torch.device(args.device)
+    except (TypeError, RuntimeError, ValueError) as error:
+        raise SystemExit(f"invalid --device {args.device!r}: {error}") from None
+    if device.type == "cuda":
+        if not torch.cuda.is_available():
+            raise SystemExit(f"--device {args.device} requested but no CUDA device is visible")
+        if device.index is None:
+            device = torch.device("cuda", torch.cuda.current_device())
+    name = device_name(device)
+    if args.hardware and args.hardware.lower() not in name.lower():
+        raise SystemExit(f"--hardware {args.hardware!r} does not match {name!r} on {device}")
+    print(f"recording on {device} ({name})")
+    return str(device)
 
 
 def _work(ops: list[str], backend: str | None = None, limit: int | None = None) -> list[tuple[Dispatcher, str, Case]]:
@@ -79,6 +104,7 @@ def _append(path: Path, record: Record) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> None:
+    args.device = _target_device(args)
     work = _work(args.ops, args.backend, args.limit)
     if args.shard:
         index, count = args.shard
@@ -152,6 +178,7 @@ def cmd_view(args: argparse.Namespace) -> None:
 
 def cmd_map(args: argparse.Namespace) -> None:
     """Fill validity regions by running the adaptive planner to fixpoint."""
+    args.device = _target_device(args)
     store = Store()
     ops = [KERNELS[name] for name in args.ops] if args.ops else list(KERNELS.values())
     total = 0
@@ -211,6 +238,7 @@ def cmd_submit(args: argparse.Namespace) -> None:
         ops=" ".join(map(shlex.quote, args.ops)),
         reps=args.reps,
         limit=f"--limit {args.limit}" if args.limit else "",
+        hardware=f"--hardware {shlex.quote(args.hardware)}" if args.hardware else "",
         shards=shards,
         shard_dir=shlex.quote(str(shard_dir)),
     )
@@ -248,6 +276,7 @@ def main() -> None:
     run.add_argument("ops", nargs="*", help="ops to test (default: all registered)")
     run.add_argument("--backend", help="restrict to one backend")
     run.add_argument("--device", default="cuda")
+    run.add_argument("--hardware", help=HARDWARE_HELP)
     run.add_argument("--reps", type=_positive, default=10)
     run.add_argument("--limit", type=_positive, help="subsample the grid to at most N cases per op")
     run.add_argument("--shard", type=_shard, help="I/K: run the I-th of K deterministic slices")
@@ -267,6 +296,7 @@ def main() -> None:
     submit = sub.add_parser("submit", help="submit the grid as a slurm array + merge job")
     submit.add_argument("ops", nargs="*")
     submit.add_argument("--array", type=_positive, default=8, help="number of shards")
+    submit.add_argument("--hardware", help=f"passed to each array task: {HARDWARE_HELP}")
     submit.add_argument("--reps", type=_positive, default=10)
     submit.add_argument("--limit", type=_positive, help="subsample the grid to at most N cases per op")
     submit.add_argument("--qos", default=None, help="slurm QoS for the array and merge jobs (default: cluster default)")
@@ -278,6 +308,7 @@ def main() -> None:
     mapping.add_argument("ops", nargs="*", help="ops to map (default: all registered)")
     mapping.add_argument("--backend", help="restrict to one backend")
     mapping.add_argument("--device", default="cuda")
+    mapping.add_argument("--hardware", help=HARDWARE_HELP)
     mapping.add_argument("--effort", choices=sorted(EFFORT), default="standard")
     mapping.add_argument("--reps", type=_positive, default=5, help="timing reps per raced probe")
     mapping.add_argument("--rounds", type=_positive, default=8, help="max plan/run iterations per backend")

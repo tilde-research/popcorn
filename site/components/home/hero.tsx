@@ -1,0 +1,46 @@
+import Link from 'next/link';
+import { basePath } from '@/lib/shared';
+import { KernelField } from './kernel-field';
+
+export function Hero() {
+  return (
+    <section className="relative flex min-h-[calc(100svh-3.5rem)] flex-col justify-center px-6 pb-20 pt-10 sm:px-10">
+      <KernelField />
+      <div className="relative z-10 mx-auto w-full max-w-3xl">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={`${basePath}/popcorn-name-dark.png`}
+          alt="popcorn"
+          width={1200}
+          height={340}
+          className="pc-fade-up mb-8 h-14 w-auto max-w-full object-contain object-left sm:h-20 md:h-24"
+        />
+        <h1
+          className="pc-fade-up-delay max-w-2xl text-[1.85rem] leading-[1.2] tracking-tight text-white sm:text-[2.35rem] md:text-[2.75rem]"
+          style={{ fontFamily: 'var(--font-display)' }}
+        >
+          The fastest{' '}
+          <em className="italic underline decoration-[color:var(--pc-butter)] decoration-1 underline-offset-[6px]">
+            correct
+          </em>{' '}
+          kernel
+          <br className="hidden sm:block" /> for every workload.
+        </h1>
+        <div className="pc-fade-up-delay-2 mt-10 flex flex-wrap items-center gap-x-8 gap-y-4">
+          <Link
+            href="/docs/quickstart"
+            className="inline-flex items-center justify-center border border-[color:var(--pc-butter)] bg-[color:var(--pc-butter)] px-5 py-2.5 text-sm font-medium text-[color:var(--pc-ink)] transition-colors hover:bg-transparent hover:text-[color:var(--pc-butter)]"
+          >
+            Get started
+          </Link>
+          <Link
+            href="/kernels"
+            className="text-sm text-stone-300 underline decoration-stone-600 underline-offset-4 transition-colors hover:text-[color:var(--pc-butter)] hover:decoration-[color:var(--pc-butter)]"
+          >
+            Explore kernels
+          </Link>
+        </div>
+      </div>
+    </section>
+  );
+}

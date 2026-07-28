@@ -10,7 +10,6 @@ export interface KernelBackend {
   name: string;
   source: string | null;
   forward_only: boolean;
-  supports: Record<string, string>;
 }
 
 export interface KernelRow {

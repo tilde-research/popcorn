@@ -12,7 +12,7 @@ from typing import Any
 
 import torch
 
-from popcorn.bench.model import Result
+from popcorn.bench.model import Record
 from popcorn.bench.service import BenchmarkService, validation_mode
 from popcorn.core import annotations
 from popcorn.core.config import call_config
@@ -251,6 +251,7 @@ class Dispatcher:
 
         # dispatch state
         self.torch_op: Any = None  # torch.library binding, set by bind_torch_op
+        self.torch_op_train: Any = None  # scalar unit-VJP binding for compile joint patterns
         self._backends: list[Backend] = [Backend(self, "torch", adapter=reference)]
         self.bench = BenchmarkService(self)
         self.tuner = Tuner(self, self.bench.store)
@@ -308,10 +309,10 @@ class Dispatcher:
         selected = self.tuner.select(call, candidates, forced, self._cache_signature(arguments), policy)
         return selected.invoke(arguments)
 
-    def validate(self, *args: Any, backend: str | None = None, **kwargs: Any) -> list[Result]:
+    def validate(self, *args: Any, backend: str | None = None, **kwargs: Any) -> list[Record]:
         return self._assess(args, kwargs, backend, benchmark=False)
 
-    def benchmark(self, *args: Any, backend: str | None = None, **kwargs: Any) -> list[Result]:
+    def benchmark(self, *args: Any, backend: str | None = None, **kwargs: Any) -> list[Record]:
         return self._assess(args, kwargs, backend, benchmark=True)
 
     def __getitem__(self, name: str) -> Backend:
@@ -414,7 +415,7 @@ class Dispatcher:
             return [backend]
         return [backend for backend in self._backends if backend.rejects(values, arguments) is None]
 
-    def _assess(self, args: tuple[Any, ...], kwargs: dict[str, Any], backend: str | None, *, benchmark: bool) -> list[Result]:
+    def _assess(self, args: tuple[Any, ...], kwargs: dict[str, Any], backend: str | None, *, benchmark: bool) -> list[Record]:
         arguments = self._bind(*args, **kwargs)
         values = self._values(arguments)
         candidates = self._eligible(values, arguments, backend)
@@ -428,7 +429,7 @@ class Dispatcher:
             benchmark=benchmark,
         )
         self.tuner.forget()
-        return [record.result for record in records]
+        return records
 
     @staticmethod
     def _cache_signature(arguments: Mapping[str, Any]) -> tuple[Any, ...]:

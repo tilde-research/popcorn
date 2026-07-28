@@ -4,6 +4,7 @@ import pytest
 import torch
 
 import popcorn.compile
+import popcorn.kernels  # noqa: F401  # populates KERNELS
 from popcorn import KERNELS
 from popcorn.compile import PATTERNS, _PopcornPass
 
@@ -21,13 +22,16 @@ def _patterns() -> int:
 
 
 class TestRegistration:
-    def test_enable_registers_and_installs(self):
+    def test_enable_registers_and_installs(self, capsys):
         before = _patterns()
-        registered = popcorn.compile.enable(ops=["rms_norm"], dtypes=(torch.float16,))
+        registered = popcorn.compile.enable(ops=["rms_norm"], dtypes=(torch.float16,), verbose=True)
         installed = torch._inductor.config.joint_custom_pre_pass
         assert isinstance(installed, _PopcornPass)
         assert registered > 0 and _patterns() - before == registered
         assert installed.uuid() is not None
+        out = capsys.readouterr().out
+        assert "rms_norm:" in out and "patterns registered" in out
+        assert "rms_norm_0_fwd" in out
 
     def test_enable_is_idempotent_and_disable_restores(self):
         popcorn.compile.enable(ops=["rms_norm"], dtypes=(torch.float32,))
@@ -86,6 +90,20 @@ class TestTorchOpAutograd:
         with op["torch"]:
             torch.ops.popcorn.rms_norm(x, w).sum().backward()
         assert w.grad is not None and x.grad is None
+
+    def test_scalar_train_binding_matches_eager(self):
+        """Unit-VJP path for losses: same grads as eager dispatch, no replay."""
+        op = KERNELS["linear_cross_entropy"]
+        x = torch.randn(16, 8, requires_grad=True)
+        w = torch.randn(32, 8, requires_grad=True)
+        labels = torch.randint(32, (16,))
+        with op["torch"]:
+            op.torch_op_train(x, w, labels).backward()
+        xr, wr = x.detach().clone().requires_grad_(), w.detach().clone().requires_grad_()
+        with op["torch"]:
+            op(xr, wr, labels).backward()
+        assert torch.allclose(x.grad, xr.grad, atol=1e-5)
+        assert torch.allclose(w.grad, wr.grad, atol=1e-5)
 
 
 class HandwrittenRMSNorm(torch.nn.Module):

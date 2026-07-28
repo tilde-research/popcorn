@@ -167,8 +167,8 @@ Use an adapter when the source signature differs, and declare shape, dtype, or f
 Validation compares eligible implementations with higher-precision reference results. It checks forward outputs and, when inputs require gradients, backward results.
 
 ```python
-results = rms_norm.validate(x, weight)
-assert all(result.status == "pass" for result in results)
+records = rms_norm.validate(x, weight)
+assert all(record.result.status == "pass" for record in records)
 ```
 
 Results are stored per case, device, PyTorch version, backend version, and gradient mode, and are stamped with a fingerprint of the kernel code: results recorded for a since-edited reference or implementation are ignored (comments and formatting don't count). A known failure is removed from automatic dispatch; without a pass row or fitted region, the reference is used.
@@ -187,10 +187,28 @@ POPCORN_BENCH=1 python train.py
 
 `benchmark` validates before timing and records implementation and reference latency and peak memory. Future calls use these measurements for dispatch.
 
+Each returned record names the backend it came from, so `report` labels the block for you:
+
 ```python
-for result in rms_norm.benchmark(x, weight):
-    print(result.status, result.bench)
+from popcorn.bench import report
+
+for record in rms_norm.benchmark(x, weight):
+    report(record)
 ```
+
+```
+fla      torch      0.1 ms -> fla    0.0 ms   (8.4x)
+         peak         0.33 GB ->      0.27 GB
+         bwd           0.4 ms ->    0.1 ms   (4.0x)
+         err 1.56e-02 on scale 5.2
+liger    torch      0.1 ms -> liger    0.0 ms   (8.2x)
+         peak         0.33 GB ->      0.27 GB
+         bwd           0.4 ms ->    0.1 ms   (4.7x)
+         err 1.56e-02 on scale 5.2
+```
+
+`report` prints and returns the text. Reach for `record.result` when you want the raw
+status, gauges, or `bench` dictionary instead.
 
 To validate, benchmark, and select the exact fastest implementation on first use, pass `bench=True` to the call or enable it for the whole application:
 
@@ -276,7 +294,7 @@ Popcorn stands on the shoulders of the open-source kernel ecosystem. The optimiz
 - [flash-attention](https://github.com/Dao-AILab/flash-attention)
 - [Unsloth](https://github.com/unslothai/unsloth)
 
-Adapted files credit their origin in the header comment.
+The agent optimization loop (`python -m popcorn.bench.loop`) is inspired by [AutoKernel](https://github.com/RightNow-AI/autokernel)'s edit–evaluate–keep/revert cycle for autonomous kernel search.
 
 ## Citation
 

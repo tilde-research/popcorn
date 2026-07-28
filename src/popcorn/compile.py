@@ -100,11 +100,15 @@ def _variants(op: Dispatcher, dtypes: frozenset[torch.dtype]) -> list[Case]:
     traced with a rank-2 batch only: the matcher re-traces at the matched
     shapes, which generalizes across ranks, while rank-1 examples trace
     degenerate backwards (no batch reduction) that poison replacements."""
+    # Rank-2 leading dims on purpose: the matcher re-traces at matched shapes
+    # (rank generalizes), while rank-1 examples trace degenerate backwards.
+    # The grid samples `...` as a single extent; force (2, 3) only for tracing.
     batch = (2, 3) if any(... in spec.tokens for spec in op.specs) else ()
     best: dict[Any, Case] = {}
     for case in grid.cases(op, limit=MAX_TRACE_GRID):
-        if case.dtype not in dtypes or case.batch != batch:
+        if case.dtype not in dtypes:
             continue
+        case = Case(case.dims, batch, case.dtype, case.args, case.present)
         scalars = tuple((name, value if type(value) is not float else value == 0.0) for name, value in case.args)
         key = (case.dtype, case.present, scalars)
         if key not in best or _size(case) < _size(best[key]):
@@ -116,13 +120,18 @@ def _variants(op: Dispatcher, dtypes: frozenset[torch.dtype]) -> list[Case]:
     return [case for case in interleaved if case is not None][:MAX_VARIANTS]
 
 
-def _pattern_fns(op: Dispatcher, bound: dict[str, Any], symbolic: bool) -> tuple[Any, Any, list[Any], dict[str, float]]:
+def _pattern_fns(
+    op: Dispatcher, bound: dict[str, Any], symbolic: bool, *, grad: bool
+) -> tuple[Any, Any, list[Any], dict[str, float]]:
     """Search/replace functions over the case's free arguments: present tensors
     stay placeholders and everything else (absent optionals, ints, bools,
     strings) is baked in. Float scalars become magic-valued keyword args when
     `symbolic`, matching any user value -- but a magic value can steer a branchy
     reference (label smoothing, dropout) into ops the user's graph never runs,
-    so a second variant bakes the floats as literals. `bound` is not mutated."""
+    so a second variant bakes the floats as literals. `bound` is not mutated.
+
+    Joint (grad) patterns replace through `torch_op_train`, the unit-VJP binding
+    for scalar losses — same cost as eager popcorn. Inference uses `torch_op`."""
     tensors = {spec.param for spec in op.specs}
     values = dict(bound)
     workaround: dict[str, float] = {}
@@ -133,6 +142,7 @@ def _pattern_fns(op: Dispatcher, bound: dict[str, Any], symbolic: bool) -> tuple
         elif symbolic and name not in tensors and type(value) is float:
             workaround[name] = values[name] = round(_MAGIC + index * 0.0137, 10)
             free.append(name)
+    target = op.torch_op_train if grad else op.torch_op
 
     def full(args: tuple[Any, ...]) -> list[Any]:
         merged = dict(values, **dict(zip(free, args)))
@@ -142,7 +152,7 @@ def _pattern_fns(op: Dispatcher, bound: dict[str, Any], symbolic: bool) -> tuple
         return op.reference(*full(args))
 
     def replace(*args: Any) -> Any:
-        return op.torch_op(*full(args))
+        return target(*full(args))
 
     signature = inspect.Signature([inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in free])
     search.__signature__ = replace.__signature__ = signature  # type: ignore[attr-defined]
@@ -173,18 +183,18 @@ def _eligibility_check(op: Dispatcher, bound: dict[str, Any], grad: bool) -> Any
     return check
 
 
-def _register(op: Dispatcher, case: Case, index: int) -> int:
+def _register(op: Dispatcher, case: Case, index: int) -> list[str]:
     # Trace on the device graphs will come from: decompositions differ (CUDA
     # sdpa lowers to flash nodes, CPU to the math path), and a pattern traced
     # on the wrong device never matches.
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    count = 0
+    names: list[str] = []
     for trace_fn, grad, tag in ((fwd_only, False, "fwd"), (joint_fwd_bwd, True, "joint")):
         bound = op._bind(**grid.make_inputs(op, case, device=device, grad=grad))
         if grad and not any(isinstance(v, torch.Tensor) and v.requires_grad for v in bound.values()):
             continue
         for symbolic in (True, False):
-            search, replace, example, workaround = _pattern_fns(op, bound, symbolic)
+            search, replace, example, workaround = _pattern_fns(op, bound, symbolic, grad=grad)
             if symbolic and not workaround:
                 continue  # no float scalars: the baked variant is the only one
             search.__name__ = f"{op.name}_{index}_{tag}" + ("_sym" if symbolic else "")
@@ -204,10 +214,11 @@ def _register(op: Dispatcher, case: Case, index: int) -> int:
                         scalar_workaround=workaround or None,
                         skip_duplicates=True,
                     )
-                count += bool(registered)
+                if registered:
+                    names.append(search.__name__)
             except Exception as error:
                 log.debug("%s: %s pattern for %s failed: %s", op.name, tag, case, error)
-    return count
+    return names
 
 
 class _PopcornPass(CustomGraphPass):
@@ -241,10 +252,17 @@ class _PopcornPass(CustomGraphPass):
         return None if inner is None else (mine, inner)
 
 
-def enable(ops: Iterable[str] | None = None, dtypes: Iterable[torch.dtype] = DTYPES) -> int:
+def enable(
+    ops: Iterable[str] | None = None,
+    dtypes: Iterable[torch.dtype] = DTYPES,
+    *,
+    verbose: bool = False,
+) -> int:
     """Trace and register replacement patterns, then install the inductor pass.
     Returns the number of newly registered patterns. Idempotent per op; call
-    again with more `ops` to widen coverage."""
+    again with more `ops` to widen coverage. With `verbose=True`, prints each
+    newly registered pattern name (`op_variant_fwd` / `_joint`, `_sym` for
+    symbolic float scalars)."""
     import popcorn.kernels  # noqa: F401  # populates KERNELS
 
     selected = [KERNELS[name] for name in ops] if ops is not None else list(KERNELS.values())
@@ -252,19 +270,25 @@ def enable(ops: Iterable[str] | None = None, dtypes: Iterable[torch.dtype] = DTY
     for op in selected:
         missing = frozenset(dtype for dtype in dtypes if (op.name, dtype) not in _TRACED)
         if not missing or op.torch_op is None:
+            if verbose:
+                print(f"{op.name}: skipped (already traced or no torch op)")
             continue
         _TRACED.update((op.name, dtype) for dtype in missing)  # marked even on failure; do not retry pathological traces
-        registered = 0
+        names: list[str] = []
         try:
             with _deadline(TRACE_BUDGET):
                 for index, case in enumerate(_variants(op, missing)):
-                    registered += _register(op, case, index)
+                    names.extend(_register(op, case, index))
         except _Expired:
             log.info("%s: compile patterns truncated after %.0fs", op.name, TRACE_BUDGET)
         except Exception as error:
             log.info("%s: no compile patterns: %s", op.name, error)
-        log.debug("%s: %d patterns registered", op.name, registered)
-        total += registered
+        log.debug("%s: %d patterns registered", op.name, len(names))
+        if verbose:
+            print(f"{op.name}: {len(names)} patterns registered")
+            for name in names:
+                print(f"  {name}")
+        total += len(names)
     if not isinstance(inductor_config.joint_custom_pre_pass, _PopcornPass):
         inductor_config.joint_custom_pre_pass = _PopcornPass(inductor_config.joint_custom_pre_pass)
     return total
