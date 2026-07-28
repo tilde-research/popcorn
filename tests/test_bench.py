@@ -232,9 +232,13 @@ def test_reports_and_viewer_consume_typed_records():
 
 def test_empty_cli_work_is_an_error(tmp_path):
     with pytest.raises(SystemExit, match="no report rows"):
-        cmd_merge(Namespace(sources=[tmp_path / "missing.jsonl"], expect=None))
+        cmd_merge(Namespace(sources=[tmp_path / "missing.jsonl"], expect=None, check=False))
     with pytest.raises(SystemExit, match="expected 2 shard files"):
-        cmd_merge(Namespace(sources=[tmp_path / "one.jsonl"], expect=2))
+        cmd_merge(Namespace(sources=[tmp_path / "one.jsonl"], expect=2, check=False))
+    with pytest.raises(SystemExit, match="needs shard files"):
+        cmd_merge(Namespace(sources=[], expect=None, check=False))
+    with pytest.raises(SystemExit, match="pass no sources"):
+        cmd_merge(Namespace(sources=[tmp_path / "one.jsonl"], expect=None, check=True))
     with pytest.raises(SystemExit, match="no matching"):
         cmd_run(
             Namespace(

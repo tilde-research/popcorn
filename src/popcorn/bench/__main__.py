@@ -6,6 +6,7 @@ import shlex
 import subprocess
 import sys
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 
 import torch
@@ -16,7 +17,7 @@ from popcorn.bench.grid import cases
 from popcorn.bench.model import Case, Record
 from popcorn.bench.plan import EFFORT, plan
 from popcorn.bench.readme import refresh
-from popcorn.bench.store import BUNDLED_REPORTS, Store, read, read_file, user_reports, write
+from popcorn.bench.store import BUNDLED_REPORTS, Store, prefer, read, read_file, user_reports, write
 from popcorn.bench.viewer import render
 from popcorn.core.config import device_name
 from popcorn.core.dispatcher import Dispatcher
@@ -157,7 +158,50 @@ def cmd_run(args: argparse.Namespace) -> None:
     raise SystemExit(1 if failures or poisoned else 0)
 
 
+def _pending(directory: Path, stored: Mapping[tuple, Record]) -> tuple[int, int, str]:
+    """Rows in a shard directory, how many the store lacks, and why it could not be read.
+
+    A shard run writes rows and leaves publishing to a separate merge step, so a merge
+    that never ran (or died) is otherwise invisible: `shards/` is gitignored and the
+    store reader does not recurse into it. Directories written by an older report schema
+    are reported rather than raised on, so one stale directory cannot mask a live one.
+    """
+    rows = 0
+    pending = 0
+    for source in sorted(directory.glob("*.jsonl")):
+        try:
+            records = read_file(source)
+        except ValueError as error:
+            return rows, pending, f"{source.name}: {error}"
+        rows += len(records)
+        pending += sum(1 for record in records if record.key not in stored or prefer(record, stored[record.key]))
+    return rows, pending, ""
+
+
 def cmd_merge(args: argparse.Namespace) -> None:
+    if args.check:
+        if args.sources:
+            raise SystemExit("merge --check scans the shard directories; pass no sources")
+        directories = sorted(path for path in (BUNDLED_REPORTS / "shards").glob("*") if path.is_dir())
+        if not directories:
+            print("no shard directories")
+            return
+        stored = {record.key: record for record in read(BUNDLED_REPORTS)}
+        orphaned = []
+        for directory in directories:
+            rows, pending, error = _pending(directory, stored)
+            if error:
+                print(f"{directory.name}: unreadable after {rows} rows -> {error}")
+            else:
+                print(f"{directory.name}: {rows} rows, {pending} not in the store")
+            if pending:
+                orphaned.append(directory)
+        if orphaned:
+            listing = " ".join(f"{path}/*.jsonl" for path in orphaned)
+            raise SystemExit(f"{len(orphaned)} shard directory(ies) never landed; merge with:\n  {listing}")
+        return
+    if not args.sources:
+        raise SystemExit("merge needs shard files, or --check to scan for unmerged ones")
     if args.expect is not None and len(args.sources) != args.expect:
         raise SystemExit(f"expected {args.expect} shard files, found {len(args.sources)}")
     records = [record for source in args.sources for record in read_file(source)]
@@ -286,7 +330,8 @@ def main() -> None:
 
     merge = sub.add_parser("merge", help="fold shard JSONL files into the reports store")
     merge.add_argument("--expect", type=_positive, help="fail unless this many shard files exist")
-    merge.add_argument("sources", nargs="+")
+    merge.add_argument("--check", action="store_true", help="report shard directories that were never merged; write nothing")
+    merge.add_argument("sources", nargs="*")
     merge.set_defaults(fn=cmd_merge)
 
     view = sub.add_parser("view", help="render the reports store as a standalone HTML page")
