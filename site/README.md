@@ -1,11 +1,11 @@
 # Popcorn docs site
 
 Docs + kernel explorer, built with [Fumadocs](https://fumadocs.dev) and deployed to GitHub
-Pages by `.github/workflows/site.yml`.
+Pages by `.github/workflows/update-site.yml`.
 
 ```bash
-python ../scripts/export_site_data.py   # regenerate public/data/ from the package + reports
-npm install
+uv run python ../scripts/update_site.py # regenerate public/data/
+npm ci
 npm run dev                             # http://localhost:3000
 ```
 

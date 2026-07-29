@@ -147,8 +147,7 @@ class ButterForCausalLM(nn.Module):
         self.rms_norm, self.loss = ops.rms_norm, ops.linear_cross_entropy
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList(
-            ButterDecoderLayer(config, config.layer_types[i % len(config.layer_types)], ops)
-            for i in range(config.num_layers)
+            ButterDecoderLayer(config, config.layer_types[i % len(config.layer_types)], ops) for i in range(config.num_layers)
         )
         self.norm = nn.Parameter(torch.ones(config.hidden_size))
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)

@@ -5,9 +5,9 @@ description: A development and dispatch library for high-performance ML kernels
 
 **Popcorn** is a development and dispatch library for high-performance machine learning
 kernels. It unifies 96 kernels and more than 100 optimized implementations behind a single
-API and automatically selects the fastest backend for your hardware. Every backend is
-rigorously validated against a reference implementation and benchmarked in a consistent
-suite, so speed never comes at the cost of correctness.
+API, then selects among eligible backends using hardware-specific benchmark records. Each
+implementation is checked against a PyTorch reference; failed and unmeasured cases remain
+visible evidence rather than being presented as successful validation.
 
 Popcorn also ships a growing collection of first-party kernels, along with the environment
 and harness to build, test, benchmark, and deploy new kernels and backends.

@@ -200,9 +200,7 @@ def fit(records: Iterable[Record], dims: Iterable[str]) -> dict[tuple[Any, ...],
     keys = set(dim_buckets) | set(real_buckets)
     for key in keys:
         spaces = {
-            name: induced
-            for name, labels in dim_buckets.get(key, {}).items()
-            if (induced := _induce(labels)) is not None
+            name: induced for name, labels in dim_buckets.get(key, {}).items() if (induced := _induce(labels)) is not None
         }
         reals = {
             name: induced

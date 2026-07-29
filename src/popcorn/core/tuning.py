@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from threading import RLock
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
@@ -15,7 +15,7 @@ from popcorn.bench.model import Record
 from popcorn.bench.store import Store, matching
 from popcorn.core.config import Call, device_name
 from popcorn.core.errors import DispatchError
-from popcorn.core.policy import Policy
+from popcorn.core.policy import DecisionContext, Policy
 from popcorn.core.sources import installed_version
 from popcorn.core.spaces import contains
 
@@ -175,10 +175,15 @@ class Tuner:
         forced: str | None,
         policy: Policy,
     ) -> Implementation:
-        eligible = [impl for impl in candidates if not policy.blocked(impl, call, forced, self)]
+        # A Tuner satisfies DecisionContext at runtime, but pyright will not accept a
+        # cached_property as a protocol member in any declaration form, and `samples` is
+        # expensive enough to keep cached. Casting the one argument the checker misjudges
+        # leaves the others checked, which a blanket ignore on these lines would not.
+        context = cast(DecisionContext, self)
+        eligible = [impl for impl in candidates if not policy.blocked(impl, call, forced, context)]
         if not eligible:
             raise DispatchError(f"{self.op.name}: no implementation is eligible")
-        return policy.choose(eligible, call, forced, self) or eligible[0]
+        return policy.choose(eligible, call, forced, context) or eligible[0]
 
     def best(self, *, device: torch.device | str | None = None, grad: bool = True, **region: Any) -> Implementation:
         allowed = self.op._dims | self.op.arg_pools.keys() | {"dtype"}

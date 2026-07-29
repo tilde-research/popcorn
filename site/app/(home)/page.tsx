@@ -15,15 +15,15 @@ export default function HomePage() {
     <div className="pc-home flex flex-1 flex-col">
       <Hero />
 
-      <section className="border-t border-white/10 px-6 py-20 sm:px-10">
+      <section className="border-t border-fd-border px-6 py-20 sm:px-10">
         <div className="mx-auto max-w-3xl">
           <h2
-            className="text-2xl tracking-tight text-white sm:text-3xl"
+            className="text-2xl tracking-tight text-fd-foreground sm:text-3xl"
             style={{ fontFamily: 'var(--font-display)' }}
           >
             Install and call.
           </h2>
-          <p className="mt-3 max-w-xl text-stone-400">
+          <p className="mt-3 max-w-xl text-fd-muted-foreground">
             Replace upstream kernel calls with calls to popcorn kernels.
           </p>
           <div className="mt-8">
@@ -35,10 +35,10 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section className="border-t border-white/10 px-6 py-20 sm:px-10">
+      <section className="border-t border-fd-border px-6 py-20 sm:px-10">
         <div className="mx-auto max-w-3xl text-center">
           <h2
-            className="text-2xl tracking-tight text-white sm:text-3xl"
+            className="text-2xl tracking-tight text-fd-foreground sm:text-3xl"
             style={{ fontFamily: 'var(--font-display)' }}
           >
             Explore the grid.
@@ -46,10 +46,10 @@ export default function HomePage() {
           <dl className="mt-12 flex flex-wrap items-start justify-center gap-x-16 gap-y-8">
             {STATS.map((s) => (
               <div key={s.label}>
-                <dt className="font-mono text-4xl text-white tabular-nums sm:text-5xl">
+                <dt className="font-mono text-4xl text-fd-foreground tabular-nums sm:text-5xl">
                   {s.value}
                 </dt>
-                <dd className="mt-2 text-sm text-stone-500">{s.label}</dd>
+                <dd className="mt-2 text-sm text-fd-muted-foreground">{s.label}</dd>
               </div>
             ))}
           </dl>
@@ -62,12 +62,12 @@ export default function HomePage() {
         </div>
       </section>
 
-      <footer className="mt-auto border-t border-white/10 px-6 py-8 sm:px-10">
-        <div className="mx-auto flex max-w-3xl flex-col gap-2 text-xs text-stone-500 sm:flex-row sm:items-center sm:justify-between">
+      <footer className="mt-auto border-t border-fd-border px-6 py-8 sm:px-10">
+        <div className="mx-auto flex max-w-3xl flex-col gap-2 text-xs text-fd-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <p>Apache-2.0 · Tilde Research</p>
           <a
             href={`https://github.com/${gitConfig.user}/${gitConfig.repo}`}
-            className="transition-colors hover:text-stone-300"
+            className="transition-colors hover:text-fd-foreground"
             target="_blank"
             rel="noreferrer"
           >

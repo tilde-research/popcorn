@@ -1,12 +1,16 @@
-"""Report persistence: bundled package reports plus the per-user cache."""
+"""Persist published Parquet reports, JSONL shards, and the user cache."""
 
 import json
 import os
+import warnings
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
+
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from popcorn.bench.model import SCHEMA, Record
 from popcorn.core.config import Call
@@ -17,7 +21,36 @@ except ImportError:
     fcntl = None
 
 BUNDLED_REPORTS = Path(__file__).parents[1] / "reports"
+PUBLISHED = ".parquet"
+SCRATCH = ".jsonl"
+# Nested fields ride as JSON text in one column each: the readers want whole rows back,
+# not projections into a gauge, and a stable string beats a struct that shifts with the model.
+NESTED = ("config", "fwd", "bwd", "bench")
+# Column types are stated rather than inferred: a column that happens to be all-null in one
+# op's rows (an absent backend_version, say) would otherwise land as pyarrow's null type and
+# refuse to concatenate with the same column elsewhere.
+_COLUMNS = {
+    "schema": pa.int32(),
+    "op": pa.string(),
+    "impl": pa.string(),
+    "case": pa.string(),
+    "case_id": pa.string(),
+    "device": pa.string(),
+    "torch": pa.string(),
+    "backend_version": pa.string(),
+    "ts": pa.string(),
+    "ref_hash": pa.string(),
+    "impl_hash": pa.string(),
+    "status": pa.string(),
+    "reason": pa.string(),
+    "grad": pa.bool_(),
+    "benchmarked": pa.bool_(),
+    "bench_error": pa.string(),
+    "reps": pa.int32(),
+} | {name: pa.string() for name in NESTED}
+_SCHEMA = pa.schema(_COLUMNS)
 _WRITE_LOCK = Lock()
+_warned = False
 
 
 def user_reports() -> Path:
@@ -35,6 +68,18 @@ def user_reports() -> Path:
 
 def conclusive(record: Record) -> bool:
     return record.result.status in ("pass", "fail", "crash", "oom")
+
+
+def unmeasured(record: Record | None, benchmark: bool = True) -> bool:
+    """Whether a benchmark run should still produce this row: absent, inconclusive, or untimed.
+
+    One definition serves the lazy per-call path and the grid-wide `fill`, so the two cannot
+    disagree about what "already cached" means.
+    """
+    status = record.result.status if record else None
+    if benchmark and status == "pass" and record is not None and not record.result.benchmarked:
+        return True
+    return status not in ("pass", "fail", "crash")
 
 
 def matching(expected: str | None, recorded: str | None) -> bool:
@@ -62,35 +107,70 @@ def _locked(path: Path) -> Iterator[None]:
                     fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+def read_parquet(path: Path) -> list[Record]:
+    rows = pq.read_table(path).to_pylist()
+    for row in rows:
+        for name in NESTED:
+            row[name] = json.loads(row[name])
+    return [Record.from_dict(row) for row in rows]
+
+
+def write_parquet(records: Iterable[Record], path: Path) -> None:
+    rows = []
+    for record in records:
+        row = record.to_dict()
+        for name in NESTED:
+            row[name] = json.dumps(row.get(name, {}), sort_keys=True)
+        rows.append(row)
+    table = pa.Table.from_pylist(rows, schema=_SCHEMA)
+    pq.write_table(table, path, compression="zstd")
+
+
 def read_file(path: Path | str) -> list[Record]:
     path = Path(path)
     if not path.exists():
         return []
+    if path.suffix == PUBLISHED:
+        return read_parquet(path)
     return [Record.from_dict(json.loads(line)) for line in path.read_text().splitlines() if line]
 
 
 def read(directory: Path | str) -> list[Record]:
-    return [record for path in sorted(Path(directory).glob("*.jsonl")) for record in read_file(path)]
+    directory = Path(directory)
+    paths = sorted(directory.glob(f"*{PUBLISHED}")) + sorted(directory.glob(f"*{SCRATCH}"))
+    return [record for path in paths for record in read_file(path)]
 
 
-def write(records: Iterable[Record], directory: Path | str) -> None:
+def bundled_path(directory: Path, op: str) -> Path:
+    """Where one op's published rows live, preferring Parquet and falling back to JSONL."""
+    published = directory / f"{op}{PUBLISHED}"
+    return published if published.exists() else directory / f"{op}{SCRATCH}"
+
+
+def _dump(records: list[Record], path: Path, suffix: str) -> None:
+    if suffix == PUBLISHED:
+        write_parquet(records, path)
+        return
+    path.write_text("\n".join(json.dumps(record.to_dict(), sort_keys=True) for record in records) + "\n")
+
+
+def write(records: Iterable[Record], directory: Path | str, suffix: str = SCRATCH) -> None:
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     grouped = defaultdict(list)
     for record in records:
         grouped[record.op].append(record)
     for op, incoming in sorted(grouped.items()):
-        path = directory / f"{op}.jsonl"
+        path = directory / f"{op}{suffix}"
         with _locked(path):
             merged = {record.key: record for record in read_file(path)}
             for record in incoming:
                 if record.key not in merged or prefer(record, merged[record.key]):
                     merged[record.key] = record
             order = sorted(merged, key=lambda key: tuple("" if value is None else str(value) for value in key))
-            lines = [json.dumps(merged[key].to_dict(), sort_keys=True) for key in order]
             temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
             try:
-                temporary.write_text("\n".join(lines) + "\n")
+                _dump([merged[key] for key in order], temporary, suffix)
                 os.replace(temporary, path)
             finally:
                 temporary.unlink(missing_ok=True)
@@ -107,9 +187,29 @@ class Store:
     def user(self) -> Path:
         return self._user or user_reports()
 
+    def announce_if_empty(self) -> None:
+        """Say so, once, when there is no evidence to dispatch on.
+
+        Published reports are fetched rather than checked in, so a fresh clone has none
+        until `popcorn.bench pull` runs. Without rows every call resolves to the torch
+        reference, which is correct but forfeits every implementation; that is too large a
+        change in behaviour to leave for the reader to infer from a slow benchmark.
+        """
+        global _warned
+        if _warned or any(self.bundled.glob(f"*{PUBLISHED}")) or any(self.bundled.glob(f"*{SCRATCH}")):
+            return
+        _warned = True
+        warnings.warn(
+            f"no reports in {self.bundled}: every call will use the torch reference. "
+            "Fetch the published evidence with `python -m popcorn.bench pull`.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
     def merged(self, op: str) -> tuple[Record, ...]:
+        self.announce_if_empty()
         merged: dict[tuple, tuple[int, Record]] = {}
-        paths = dict.fromkeys((self.bundled / f"{op}.jsonl", self.user / f"{op}.jsonl"))
+        paths = dict.fromkeys((bundled_path(self.bundled, op), self.user / f"{op}{SCRATCH}"))
         for priority, path in enumerate(paths):
             for record in read_file(path):
                 key = record.key[1:]
@@ -146,4 +246,4 @@ class Store:
         write(records, self.user)
 
     def write_bundled(self, records: Iterable[Record]) -> None:
-        write(records, self.bundled)
+        write(records, self.bundled, PUBLISHED)

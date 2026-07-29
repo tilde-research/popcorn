@@ -72,21 +72,37 @@ html > body[data-scroll-locked] {
   }
 }
 
-/* Cinema home stage — keep nav readable even if site theme is light */
+/* Home stage */
 .pc-home {
-  --pc-stage: #050505;
+  --pc-mark: rgb(28 25 23 / 0.72);
+  --pc-glow-primary: rgb(224 168 74 / 0.2);
+  --pc-glow-secondary: rgb(28 25 23 / 0.05);
+  --color-fd-background: #f4f1e8;
+  --color-fd-foreground: #1c1917;
+  --color-fd-muted-foreground: #57534e;
+  --color-fd-popover: #fffdf7;
+  --color-fd-card: rgb(255 253 247 / 0.72);
+  --color-fd-accent: #e9e2d2;
+  --color-fd-border: rgb(28 25 23 / 0.14);
+  background: var(--color-fd-background);
+  color: var(--color-fd-foreground);
+}
+
+.dark .pc-home {
+  --pc-mark: rgb(255 255 255 / 0.9);
+  --pc-glow-primary: rgb(224 168 74 / 0.1);
+  --pc-glow-secondary: rgb(255 255 255 / 0.035);
   --color-fd-background: #050505;
   --color-fd-foreground: #f5f5f4;
   --color-fd-muted-foreground: #a8a29e;
   --color-fd-popover: #0a0a0a;
+  --color-fd-card: rgb(10 10 10 / 0.72);
   --color-fd-accent: #1a1a1a;
   --color-fd-border: rgb(255 255 255 / 0.1);
-  background: var(--pc-stage);
-  color: #f5f5f4;
 }
 
 .pc-home #nd-nav {
-  color: #f5f5f4;
+  color: var(--color-fd-foreground);
 }
 
 .pc-home #nd-nav a,

@@ -1,11 +1,8 @@
 #!/usr/bin/env python
-"""One-shot: migrate report rows from schema 2 to schema 3.
+"""Migrate report JSONL from schema 2 `backend` to schema 3 `impl`.
 
-Schema 3 renames the `backend` key to `impl`, matching the vocabulary split where
-a backend is a library (fla, liger) and an implementation is one kernel from one
-library. Only that key and the schema number change. Rows are re-serialized with
-`sort_keys=True` to match `Store.write`, so migrated files stay byte-identical to
-freshly written ones. Already-migrated rows pass through untouched.
+Usage:
+    uv run python scripts/migrate_impl_key.py [REPORT.jsonl ...]
 """
 
 import json

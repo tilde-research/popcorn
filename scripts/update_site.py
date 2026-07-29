@@ -1,14 +1,8 @@
-"""Owns site/public/data. Nothing else writes it.
+#!/usr/bin/env python
+"""Export kernel cards and benchmark plots to site/public/data.
 
-Exports kernel cards and slimmed benchmark rows as JSON for the docs site:
-index.json (card grid + search) and one <kernel>.json per op (card page + plots).
-The output is generated, gitignored, and rebuilt by the Site workflow on every
-deploy; run this locally when the explorer must reflect new report rows.
-
-Docs markdown is not copied here -- the site reads `docs/` in place. Badges are
-update_readme.py's job. Run from the repo root:
-
-    python scripts/update_site.py [--out site/public/data]
+Usage:
+    uv run python scripts/update_site.py [--out DIRECTORY]
 """
 
 import argparse
@@ -22,7 +16,7 @@ import torch
 import popcorn.kernels  # noqa: F401  # populates KERNELS
 from popcorn import KERNELS
 from popcorn.bench.compare import FLOORS
-from popcorn.bench.store import BUNDLED_REPORTS, read_file
+from popcorn.bench.store import BUNDLED_REPORTS, bundled_path, read_file
 
 BENCH_KEYS = (
     "fwd_ms",
@@ -57,7 +51,7 @@ def errors(record) -> dict:
 def rows(name: str) -> list[dict]:
     """Newest benchmarked row per (impl, device, case, grad), slimmed to plot fields."""
     latest = {}
-    for record in read_file(BUNDLED_REPORTS / f"{name}.jsonl"):
+    for record in read_file(bundled_path(BUNDLED_REPORTS, name)):
         key = (record.impl, record.environment.device, record.case_id, record.result.grad)
         if key not in latest or record.environment.ts > latest[key].environment.ts:
             latest[key] = record

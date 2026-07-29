@@ -9,4 +9,5 @@
 
 ```bash
 uv pip install -e ".[fla,liger]" jupyter
+uv run python -m popcorn.bench pull   # the reports dispatch selects on; not in git
 ```

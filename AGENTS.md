@@ -20,11 +20,17 @@ failure before adding features; do not silently alter pins or bypass registratio
 - `src/popcorn/impls/`: first-party Triton and CUDA implementations.
 - `src/popcorn/core/`: registration, dispatch, constraints, and backend loading.
 - `src/popcorn/bench/`: correctness, benchmarking, fitting, and report tooling.
-- `src/popcorn/reports/*.jsonl`: generated evidence used by dispatch.
-- `tests/`: convention, CPU, and GPU-gated tests.
+- `src/popcorn/reports/*.parquet`: generated evidence used by dispatch, fetched by
+ `popcorn.bench pull` at the revision pinned in `reports/REVISION`; not in git.
+- `tests/core/`: everything that is not a kernel adapter; runs with no backend installed.
+- `tests/kernels/`: registration conventions and per-kernel smoke; CI runs it once per backend,
+  each alone in its environment.
+- `tests/integration/`: what needs two backends at once (`fla` + `liger`).
 - `scripts/`: one owner per generated artifact — `bench_hardware.py` writes report rows,
   `update_readme.py` the README badge block, `update_site.py` `site/public/data`. No script
   writes another's output, and `docs/` has a single copy that the site renders in place.
+ `check_records.py` and `per_backend.sh` write no generated repository artifacts: the first
+ catches missing/stale fingerprints, the second reruns a command once per isolated backend.
 
 ## Non-negotiable rules
 
@@ -34,7 +40,7 @@ failure before adding features; do not silently alter pins or bypass registratio
 - Shape validity comes from benchmark reports. Do not use removed `supports=` or `test_shapes=` arguments.
 - Express dtype/value restrictions with narrowed annotations; use predicates only for runtime poison avoidance.
 - Never hide a fallback, swallow an error, truncate inputs, or claim validation that was not run.
-- Never hand-edit report JSONL or generated README badges; use the owning script above.
+- Never hand-edit report Parquet or generated README badges; use the owning script above.
 - Adapted code requires a license-compatible MIT/BSD/Apache source and a provenance header.
 - Ask before changing dependencies, public signatures, dispatch policy, CI, or release configuration.
 - Do not commit or push unless explicitly requested.
@@ -47,7 +53,7 @@ Start with the narrowest relevant test, then run the applicable handoff checks:
 uv run pytest tests -q
 uv run pyright
 scripts/format.sh
-uv run python -m popcorn.bench run <op> --impl <name>
+uv run python -m popcorn.bench run <op> --backend <name>
 ```
 
 Kernel/implementation changes require the full relevant hardware grid with zero `fail`, `crash`, `error`,

@@ -1,5 +1,4 @@
-# Inert while popcorn lives in the monorepo (workflows only trigger from the
-# repository root); active as-is once the package is extracted to its own repo.
+# Smoke CI for core, isolated backends, and multi-backend integration.
 name: CI
 
 on:
@@ -9,12 +8,19 @@ on:
 
 jobs:
   lint:
+    # The dev group rather than `uvx ruff`, so the pinned version contributors run through
+    # scripts/format.sh is the one that gates the PR. The group installs without the project,
+    # so this stays a seconds-long job with no torch download.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uvx ruff check .
-      - run: uvx ruff format --check .
+        with:
+          python-version: "3.12"
+      - run: uv venv
+      - run: uv pip install --group dev
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
 
   types:
     runs-on: ubuntu-latest
@@ -25,22 +31,11 @@ jobs:
           python-version: "3.12"
       - run: uv venv
       - run: uv pip install --torch-backend=cpu -e . --group dev
+        env:
+          POPCORN_SKIP_REPORTS: "1"
       - run: uv run --no-sync pyright
 
-  derived:
-    # The badge block is the only generated artifact that is committed; site data
-    # is gitignored and rebuilt by the Site workflow, so there is nothing to check.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          python-version: "3.12"
-      - run: uv venv
-      - run: uv pip install --torch-backend=cpu -e .
-      - run: uv run --no-sync python scripts/update_readme.py --check
-
-  test:
+  core:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -53,13 +48,79 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: uv venv --python ${{ matrix.python }}
       - run: uv pip install --torch-backend=cpu -e . --group dev
-      - run: uv run --no-sync pytest tests -q
+        env:
+          POPCORN_SKIP_REPORTS: "1"
+      - run: uv run --no-sync pytest tests/core -q
+
+  kernels:
+    # The matrix verifies registration and package isolation on CPU. Numerical smoke is
+    # CUDA-gated; fa3 and unsloth run only on release hardware.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: none
+            target: "."
+          - backend: fla
+            target: ".[fla]"
+          - backend: liger
+            target: ".[liger]"
+          - backend: quack
+            target: ".[quack]"
+    name: kernels (${{ matrix.backend }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv venv
+      - run: uv pip install --torch-backend=cpu -e "${{ matrix.target }}" --group dev
+        env:
+          POPCORN_SKIP_REPORTS: "1"
+      - run: uv run --no-sync pytest tests/kernels -q
+        env:
+          POPCORN_TEST_BACKEND: ${{ matrix.backend }}
+
+  integration:
+    # The defined pair: fla and liger are the only two that resolve against CPU torch, and
+    # they overlap on seven ops. See tests/integration/test_backend_pair.py.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv venv
+      - run: uv pip install --torch-backend=cpu -e ".[fla,liger]" --group dev
+        env:
+          POPCORN_SKIP_REPORTS: "1"
+      - run: uv run --no-sync pytest tests/integration -q
+
+  derived:
+    # The badge block is the only generated artifact that is committed; site data
+    # is gitignored and rebuilt by update-site.yml, so there is nothing to check.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv venv
+      # Badges and coverage are both derived from the pinned report cache, which the
+      # install fetches (see setup.py).
+      - run: uv pip install --torch-backend=cpu -e .
+      - run: uv run --no-sync python scripts/update_readme.py --check
+      # Keep the pin synchronized with the current registry and fingerprints. Passing
+      # validation is a stricter release-hardware gate (`check_records.py --require-pass`).
+      - run: uv run --no-sync python scripts/check_records.py
 
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      # setup.py fetches the report cache into the wheel; no separate step needed.
       - run: uv build
       - uses: actions/upload-artifact@v4
         with:

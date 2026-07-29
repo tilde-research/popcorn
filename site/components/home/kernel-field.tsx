@@ -17,7 +17,7 @@ const KERNELS = [
 
 function markStyle(extra: CSSProperties = {}): CSSProperties {
   return {
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    backgroundColor: 'var(--pc-mark)',
     WebkitMaskImage: `url(${MARK})`,
     maskImage: `url(${MARK})`,
     WebkitMaskSize: 'contain',
@@ -38,7 +38,7 @@ export function KernelField() {
         className="absolute inset-0"
         style={{
           background:
-            'radial-gradient(ellipse 70% 55% at 50% 40%, rgba(224,168,74,0.10), transparent 70%), radial-gradient(ellipse 50% 40% at 70% 70%, rgba(255,255,255,0.035), transparent 60%)',
+            'radial-gradient(ellipse 70% 55% at 50% 40%, var(--pc-glow-primary), transparent 70%), radial-gradient(ellipse 50% 40% at 70% 70%, var(--pc-glow-secondary), transparent 60%)',
         }}
       />
       <div

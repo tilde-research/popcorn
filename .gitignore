@@ -5,10 +5,16 @@ unsloth_compiled_cache/
 .pytest_cache/
 .ruff_cache/
 .venv/
+uv.lock
 dist/
 build/
 logs/
 **/reports/shards/
 **/reports/index.html
+# Reports are fetched from the hub at the pinned REVISION, not checked in.
+src/popcorn/reports/*.parquet
+src/popcorn/reports/*.jsonl
+src/popcorn/reports/.revision
 *.jsonl.lock
+*.parquet.lock
 TODO.md

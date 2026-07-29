@@ -40,14 +40,52 @@ flowchart TD
 From the repository root:
 
 ```bash
-uv sync
+uv sync                      # also fetches the report cache; see setup.py
 uv run pytest tests -q       # GPU smoke tests auto-skip without CUDA
 scripts/format.sh            # ruff format + lint fixes
 ```
 
+The suite is three tiers, one directory each, and CI runs them as separate jobs:
+
+| tier | what it covers | how CI runs it |
+|---|---|---|
+| `tests/core` | everything that is not a kernel adapter: dispatch, policy, store, hub, CLI, `popcorn.compile` | once, no backend installed |
+| `tests/kernels` | registration conventions and a per-kernel smoke slice | once per backend, each alone in its environment |
+| `tests/integration` | what needs two backends at once | once, with `fla` and `liger` together |
+
+Backends pin mutually exclusive requirements and some patch torch on import, so a single environment holding
+all of them tests a configuration no user has. `scripts/per_backend.sh pytest tests/kernels -q` reproduces the
+per-backend loop locally; pairs whose library is absent report as skipped rather than passing silently.
+CI never runs benchmarks — that is `python -m popcorn.bench`, on a GPU.
+
+Reports are evidence, not source: they live in the [popcorn-reports](https://huggingface.co/datasets/tilde-research/popcorn-reports)
+dataset rather than in git, so history does not carry hundreds of megabytes of Parquet. Any build — wheel or
+editable — fetches the revision pinned in `src/popcorn/reports/REVISION`, which is what makes a checkout
+reproducible. `POPCORN_SKIP_REPORTS=1` builds without them, and `python -m popcorn.bench pull` refetches on
+demand; with no rows, every call resolves to the torch reference and popcorn says so.
+
+`python -m popcorn.bench fill` measures whatever combinations your machine has no timed row for and writes
+them to your user cache, which dispatch reads alongside the shipped ones.
+
 With the [Ruff extension](https://marketplace.visualstudio.com/items?itemName=charliermarsh.ruff), the checked-in `.vscode/settings.json` formats and lint-fixes on save; `scripts/format.sh` does the same from the terminal. There are no commit hooks — CI enforces formatting on the PR.
 
 Backend extras (`fla`, `liger`, ...) are declared in [pyproject.toml](pyproject.toml); install the ones you work on with `uv sync --extra fla`. Verifying backends ([5. Verify](#5-verify)) needs a CUDA machine; everything else runs on CPU.
+
+Two extras cannot be installed as casually as the rest. `unsloth` does not resolve against CPU torch, so it
+needs a CUDA torch build. `fa3` is source-only: FlashAttention-3 publishes nothing to PyPI, lives in the
+`hopper/` subdirectory of the flash-attention repository, and imports torch in its own `setup.py`.
+[pyproject.toml](pyproject.toml) points `flash-attn-3` at a pinned commit and turns build isolation off for it,
+which makes it the one extra that cannot come from a bare `uv sync` — the build reads the environment, so torch
+and the build tools have to be installed first:
+
+```bash
+uv sync
+uv pip install setuptools wheel packaging
+uv sync --extra fa3          # needs nvcc, a Hopper GPU, and tens of minutes of compiling
+```
+
+A downstream consumer needs the same two stanzas in their own `pyproject.toml`, because PyPI rejects direct git
+references in published metadata. This is why `fa3` is absent from the CI matrix rather than merely slow there.
 
 > [!NOTE]
 > → Adding a backend to an existing op: [1. Support an existing kernel](#1-support-an-existing-kernel)
@@ -232,7 +270,7 @@ result = compare(mine, reference, {"x": x, "weight": weight})
 
 `compare` consumes concrete named inputs, checks forward and backward against fp64 truth, then times both callables. It owns no registry or persistence.
 
-`run` executes the op's full grid (shapes x args x dtypes x batch ranks x optional-tensor presence), forward and backward. Correctness is completed before timing; a timing failure is recorded separately and never overwrites a correctness pass. `--reps` controls seeded comparisons and timed repetitions; `--limit` takes one deterministic per-op sample shared by every backend; `--shard I/K` selects one contiguous slice. Rows atomically upsert into `src/popcorn/reports/<op>.jsonl` by exact case, gradient requirement, hardware, Torch version, and backend version. `run` and `merge` regenerate the README badges automatically.
+`run` executes the op's full grid (shapes x args x dtypes x batch ranks x optional-tensor presence), forward and backward. Correctness is completed before timing; a timing failure is recorded separately and never overwrites a correctness pass. `--reps` controls seeded comparisons and timed repetitions; `--limit` takes one deterministic per-op sample shared by every backend; `--shard I/K` selects one contiguous slice. Rows atomically upsert into `src/popcorn/reports/<op>.parquet` by exact case, gradient requirement, hardware, Torch version, and backend version. `run` and `merge` regenerate the README badges automatically.
 
 Before any case runs, `run` and `map` pin the target: a bare `--device cuda` resolves to the current index (`cuda:0`), a CUDA request with no visible GPU is an error rather than a silent CPU run, and the resolved device name is printed. Hardware is stamped from that live device, so pass `--hardware H100` to abort when the machine you landed on is not the one you meant to record. `submit` forwards the gate to every array task.
 
@@ -254,7 +292,7 @@ A successful row may also have `bench_error`; correctness remains valid, but the
 Automatic dispatch admits a backend only with an exact pass row or membership in a fitted validity region (derived from report rows). Otherwise the reference serves the call. `POPCORN_BENCH=1` lazily measures and records on first encounter. Map regions with `python -m popcorn.bench map --effort standard`.
 
 > [!TIP]
-> Commit `src/popcorn/reports/*.jsonl`; they are the bundled database that tunes dispatch on contributor hardware. Reports and the README badges are machine-written, never edit them by hand. User-local cache rows are not committed.
+> Publish a local Parquet store with `python -m popcorn.bench publish`, or fold shard JSONL and publish in one step with `python -m popcorn.bench merge --publish <shards...>`. The dataset commit is written into `REVISION` — that pin is what you commit. Reports and README badges are machine-written, never edit them by hand. User-local cache rows stay JSONL and are not published.
 
 > [!NOTE]
 > → Zero fail, zero crash, zero error, and zero benchmark error: [6. Submit](#6-submit)
@@ -264,8 +302,10 @@ Automatic dispatch admits a backend only with an exact pass row or membership in
 ## 6. Submit
 
 - [ ] `uv run pytest tests -q` green, `scripts/format.sh` leaves no diff
+- [ ] `scripts/update_readme.py --check` and `scripts/check_records.py` pass (CI runs both; the second proves
+      the pinned reports still cover every implementation at its current fingerprint)
 - [ ] full grid run for every op you touched: zero fail, crash, error, or benchmark error
-- [ ] `src/popcorn/reports/*.jsonl` rows for your hardware committed, README badges regenerated (`scripts/update_readme.py`)
+- [ ] rows for your hardware published (`merge --publish`), updated `REVISION` committed, README badges regenerated (`scripts/update_readme.py`)
 - [ ] version pins in `declare_backend` and the pyproject extra match what you tested
 - [ ] PR description: op + backend, hardware, and the matrix row (pass/skip counts, speedups)
 

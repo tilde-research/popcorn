@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Format and lint-fix the package; CI enforces both without fixing.
+# Format and lint-fix the repository.
+#
+# Usage:
+#   scripts/format.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 uv run ruff format .

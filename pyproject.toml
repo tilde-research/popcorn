@@ -24,6 +24,10 @@ dependencies = [
     "jaxtyping>=0.2.36",
     "packaging>=23.0",
     "einops>=0.8",
+    # Published reports are Parquet, fetched from the hub rather than checked in:
+    # both libraries are on the path from a fresh install to a dispatchable store.
+    "pyarrow>=15.0",
+    "huggingface-hub>=0.34",
 ]
 
 [project.urls]
@@ -31,26 +35,47 @@ Repository = "https://github.com/tilde-research/popcorn"
 Issues = "https://github.com/tilde-research/popcorn/issues"
 
 # One extra per backend, named exactly like the backend; pins mirror declare_backend.
+# There is deliberately no aggregate extra: the backends pin mutually exclusive
+# requirements, so an "everything" install does not resolve.
 [project.optional-dependencies]
 fa3 = ["flash-attn-3>=3.0.0,<=3.0.0"]
 fla = ["flash-linear-attention>=0.4.0,<=0.4.2"]
 liger = ["liger-kernel>=0.6.0,<=0.7.0"]
 quack = ["quack-kernels>=0.5.0,<=0.5.0"]
 unsloth = ["unsloth>=2026.7.1,<=2026.7.5"]
-# remove this option. Not intercompatible
-all = [
-    "flash-attn-3>=3.0.0,<=3.0.0",
-    "flash-linear-attention>=0.4.0,<=0.4.2",
-    "liger-kernel>=0.6.0,<=0.7.0",
-    "quack-kernels>=0.5.0,<=0.5.0",
-    "unsloth>=2026.7.1,<=2026.7.5",
-]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.8", "pyright>=1.1.390"]
+# ruff is pinned to a minor range, not a floor: its default rule set changes between minors
+# (0.16 enabled BLE001, B023, I001 and others), so an unpinned linter silently turns a green
+# CI red on an unrelated day. CI installs this group instead of running `uvx ruff`, so the
+# version contributors get from scripts/format.sh is the version that gates the PR.
+dev = ["pytest>=8.0", "ruff>=0.15.21,<0.16", "pyright>=1.1.390"]
+
+# FlashAttention-3 is source-only: it lives in the `hopper/` subdirectory of the
+# flash-attention repository and publishes nothing to PyPI. The extra above stays a plain
+# version pin because PyPI rejects direct references in published metadata; the source is
+# resolved here, where it applies to this repository only. Pinned to the commit verified to
+# declare flash_attn_3 3.0.0 -- FA3 has no release tags of its own.
+[tool.uv.sources]
+flash-attn-3 = { git = "https://github.com/Dao-AILab/flash-attention", subdirectory = "hopper", rev = "849f660f73b176e5ad5670e7f822c7fa9f3eaf8b" }
+
+# Its setup.py imports torch, and the extension has to compile against the same torch that
+# will later import it, or it loads and segfaults. uv's `match-runtime` build dependency is
+# the clean way to express that and is rejected here -- FA3 declares no static metadata, so
+# uv cannot know the runtime version before building -- which leaves build isolation off,
+# the method upstream documents. The build then reads the project environment, so unlike
+# every other extra this one is a two-step install and cannot be part of a bare `uv sync`:
+#
+#   uv sync                                  # torch and the build tools first
+#   uv pip install setuptools wheel packaging
+#   uv sync --extra fa3                      # nvcc, a Hopper GPU, tens of minutes
+[tool.uv]
+no-build-isolation-package = ["flash-attn-3"]
 
 [build-system]
-requires = ["setuptools>=77"]
+# huggingface-hub is a build requirement because setup.py fetches the report cache on the
+# way in; see setup.py for why the build is the only hook an install has.
+requires = ["setuptools>=77", "huggingface-hub>=0.34"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
@@ -60,7 +85,7 @@ include-package-data = false
 where = ["src"]
 
 [tool.setuptools.package-data]
-popcorn = ["py.typed", "reports/*.jsonl"]
+popcorn = ["py.typed", "reports/*.parquet", "reports/REVISION", "reports/.revision"]
 "popcorn.impls" = ["*.cu"]
 
 [tool.ruff]
@@ -69,6 +94,12 @@ line-length = 127
 [tool.ruff.lint]
 # jaxtyping shape annotations (Float[Tensor, "... D"]) parse as forward refs.
 ignore = ["F722", "F821"]
+
+[tool.ruff.lint.per-file-ignores]
+# Every backend must be declared before the kernel modules import, because each one
+# registers implementations against a declared name. The order is the contract, so the
+# imports cannot move above the declare_backend calls.
+"src/popcorn/kernels/__init__.py" = ["E402"]
 
 # Typed surface: the dispatcher and harness. Kernel references use jaxtyping and
 # adapters intentionally leave parameters bare (annotations become dispatch gates).

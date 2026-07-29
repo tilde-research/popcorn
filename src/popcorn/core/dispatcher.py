@@ -472,9 +472,7 @@ def register_kernel(
     tags: set[Tag] | frozenset[Tag] | None = None,
 ) -> Dispatcher | Callable[[Callable[..., Any]], Dispatcher]:
     def wrap(reference: Callable[..., Any]) -> Dispatcher:
-        dispatcher = Dispatcher(
-            reference, test_args=test_args, test_inputs=test_inputs, name=name, tags=tags
-        )
+        dispatcher = Dispatcher(reference, test_args=test_args, test_inputs=test_inputs, name=name, tags=tags)
         if dispatcher.name in KERNELS:
             raise ValueError(f"kernel {dispatcher.name!r} already registered")
         KERNELS[dispatcher.name] = dispatcher

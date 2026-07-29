@@ -22,49 +22,43 @@ from popcorn.core.spaces import Range, Space
 # Sequence / token extents: fine below 4K (training chunks, decode steps, tile
 # edges), then the shipped context ladders — 8K–128K common, 256K–1M widely
 # advertised, 2M–4M frontier (Gemini / UltraLong-class; Llama 4 Scout claims 10M).
-_SEQ = (
-    Range(2, 4096)
-    | {
-        8192,
-        16384,
-        32768,
-        65536,
-        131_072,
-        262_144,
-        524_288,
-        1_048_576,
-        2_097_152,
-        4_194_304,
-    }
-)
+_SEQ = Range(2, 4096) | {
+    8192,
+    16384,
+    32768,
+    65536,
+    131_072,
+    262_144,
+    524_288,
+    1_048_576,
+    2_097_152,
+    4_194_304,
+}
 
 # Hidden / FFN widths: small models and norms through Llama-405B (16384) /
 # Command-R+ (12288). Intermediate is typically ~2.7–3.5× hidden (SwiGLU).
-_WIDTH = (
-    Range(8, 512)
-    | {
-        768,
-        1024,
-        1536,
-        2048,
-        2560,
-        3072,
-        4096,
-        5120,
-        6144,
-        8192,
-        10240,
-        12288,
-        14336,
-        16384,
-        18432,
-        22016,
-        24576,
-        28672,
-        32768,
-        53248,
-    }
-)
+_WIDTH = Range(8, 512) | {
+    768,
+    1024,
+    1536,
+    2048,
+    2560,
+    3072,
+    4096,
+    5120,
+    6144,
+    8192,
+    10240,
+    12288,
+    14336,
+    16384,
+    18432,
+    22016,
+    24576,
+    28672,
+    32768,
+    53248,
+}
 
 # Attention heads: MQA (kv=1), GQA groups (2/4/8), and MHA (kv == q).
 # Llama 3.1: 32/8, 64/8, 128/8; Qwen3: 16/8 … 64/8; Mixtral: 32/8.

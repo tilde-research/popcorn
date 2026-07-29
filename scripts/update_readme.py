@@ -1,9 +1,9 @@
 #!/usr/bin/env python
-"""Regenerate the README badges from the bundled reports and print the detailed
-per-backend matrix. Runs nothing; see bench_hardware.py to produce rows.
+"""Regenerate README badges from the bundled reports.
 
-`--check` reports staleness without writing the file, exiting 1 if the badge
-block would change (for CI)."""
+Usage:
+    uv run python scripts/update_readme.py [--check]
+"""
 
 import argparse
 
@@ -20,7 +20,9 @@ def main() -> None:
     matrix, stale = refresh(ops=KERNELS, write=not args.check)
     print(matrix)
     if args.check and stale:
-        raise SystemExit("README badges are out of date; run scripts/update_readme.py")
+        raise SystemExit(
+            "README badges are out of date. Regenerate and commit the result:\n  uv run python scripts/update_readme.py"
+        )
 
 
 if __name__ == "__main__":

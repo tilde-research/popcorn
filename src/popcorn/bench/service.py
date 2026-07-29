@@ -14,7 +14,7 @@ import torch
 from popcorn.bench.compare import compare_inputs
 from popcorn.bench.grid import cases, make_inputs
 from popcorn.bench.model import Case, Environment, Record, Result
-from popcorn.bench.store import Store
+from popcorn.bench.store import Store, unmeasured
 from popcorn.core.config import Call, device_name
 from popcorn.core.errors import BackendUnavailableError, BackendVersionError, DispatchError
 from popcorn.core.sources import installed_version
@@ -183,10 +183,7 @@ class BenchmarkService:
             ref_hash=self.op.fingerprint,
             impl_hash=self._registered(backend).fingerprint,
         )
-        status = record.result.status if record else None
-        if benchmark and status == "pass" and record is not None and not record.result.benchmarked:
-            return True
-        return status not in ("pass", "fail", "crash")
+        return unmeasured(record, benchmark)
 
     def ensure(self, call: Call, arguments: Mapping[str, Any], backends: Iterable[str], *, benchmark: bool) -> list[Record]:
         """Fill in whatever conclusive (and, for bench mode, timed) records are still missing."""

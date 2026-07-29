@@ -92,10 +92,12 @@ def _bind_backward(op: Dispatcher, signature: inspect.Signature, tensor_at: list
     params = [
         inspect.Parameter("grad_output", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=torch.Tensor),
         *(p.replace(default=inspect.Parameter.empty) for p in signature.parameters.values()),
-        inspect.Parameter("needs_input_grad", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=list[bool]),
+        inspect.Parameter("needs_input_grad", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=typing.List[bool]),
     ]
     replay.__name__ = f"{op.name}_backward"
-    replay.__signature__ = fake.__signature__ = inspect.Signature(params, return_annotation=list[torch.Tensor])  # type: ignore[attr-defined]
+    replay.__signature__ = fake.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+        params, return_annotation=typing.List[torch.Tensor]
+    )
     backward_op = torch.library.custom_op(f"popcorn::{op.name}_backward", replay, mutates_args=())
     backward_op.register_fake(fake)
     return backward_op

@@ -84,12 +84,12 @@ export function SwapDiff() {
 
   return (
     <div
-      className="border border-white/10 bg-black/50"
+      className="border border-fd-border bg-fd-card"
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
     >
-      <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
-        <span key={swap.op} className="pc-diff-line font-mono text-xs text-stone-500">
+      <div className="flex items-center justify-between border-b border-fd-border px-4 py-2.5">
+        <span key={swap.op} className="pc-diff-line font-mono text-xs text-fd-muted-foreground">
           {swap.op}
         </span>
         <div className="flex gap-1.5" role="tablist" aria-label="Kernel swap examples">
@@ -101,7 +101,9 @@ export function SwapDiff() {
               aria-label={item.op}
               onClick={() => setIndex(i)}
               className={`h-1 w-4 transition-colors ${
-                i === index ? 'bg-[color:var(--pc-butter)]' : 'bg-white/15 hover:bg-white/35'
+                i === index
+                  ? 'bg-[color:var(--pc-butter)]'
+                  : 'bg-fd-foreground/15 hover:bg-fd-foreground/35'
               }`}
             />
           ))}
@@ -115,8 +117,8 @@ export function SwapDiff() {
               key={`${index}-${i}`}
               className={`pc-diff-line block px-4 ${
                 line.sign === '-'
-                  ? 'bg-red-500/[0.07] text-red-300/80'
-                  : 'bg-emerald-500/[0.07] text-emerald-300/90'
+                  ? 'bg-red-500/[0.07] text-red-700/80 dark:text-red-300/80'
+                  : 'bg-emerald-500/[0.07] text-emerald-700/90 dark:text-emerald-300/90'
               }`}
               style={{ animationDelay: `${i * 55}ms` }}
             >

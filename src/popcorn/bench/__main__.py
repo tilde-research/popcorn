@@ -15,14 +15,27 @@ import torch
 
 import popcorn.kernels  # noqa: F401
 from popcorn import KERNELS
+from popcorn.bench import hub
 from popcorn.bench.grid import cases
 from popcorn.bench.model import Case, Record
 from popcorn.bench.plan import EFFORT, plan
 from popcorn.bench.readme import refresh
-from popcorn.bench.store import BUNDLED_REPORTS, Store, prefer, read, read_file, user_reports, write
+from popcorn.bench.store import (
+    BUNDLED_REPORTS,
+    PUBLISHED,
+    Store,
+    matching,
+    prefer,
+    read,
+    read_file,
+    unmeasured,
+    user_reports,
+    write,
+)
 from popcorn.bench.viewer import render
 from popcorn.core.config import device_name
-from popcorn.core.dispatcher import Dispatcher
+from popcorn.core.dispatcher import Dispatcher, Implementation
+from popcorn.core.sources import installed_version
 
 SBATCH = """\
 #!/bin/bash
@@ -165,7 +178,7 @@ def cmd_run_case(args: argparse.Namespace) -> None:
 
 
 def _publish(records: list[Record]) -> None:
-    write(records, BUNDLED_REPORTS)
+    write(records, BUNDLED_REPORTS, PUBLISHED)
     matrix, _ = refresh(ops=KERNELS)
     print(matrix)
 
@@ -284,6 +297,96 @@ def cmd_merge(args: argparse.Namespace) -> None:
     if not records:
         raise SystemExit("no report rows to merge")
     _publish(records)
+    if args.publish:
+        revision = hub.publish(message=f"Merge {len(records)} rows from {len(args.sources)} shards")
+        print(f"published {hub.repository()} at {revision}; pin updated")
+
+
+def _impl(op: Dispatcher, name: str) -> Implementation:
+    return next(candidate for candidate in op._impls if candidate.name == name)
+
+
+def _cached(store: Store, work: list[tuple[Dispatcher, str, Case]], device: str) -> dict[tuple[str, str, str], Record]:
+    """The best row this machine already holds per (op, impl, case), ignoring rows it cannot use.
+
+    Evidence from another GPU, Torch build, backend version, or revision of the code says
+    nothing about what to run here, so those rows are not treated as cached.
+    """
+    best: dict[tuple[str, str, str], Record] = {}
+    for name in dict.fromkeys(op.name for op, _, _ in work):
+        op = KERNELS[name]
+        implementations = {impl.name: impl for impl in op._impls}
+        for record in store.merged(name):
+            environment = record.environment
+            implementation = implementations.get(record.impl)
+            usable = (
+                implementation is not None
+                and environment.device == device
+                and environment.torch == torch.__version__
+                and environment.backend_version == installed_version(record.impl)
+                and matching(op.fingerprint, environment.ref_hash)
+                and matching(implementation.fingerprint, environment.impl_hash)
+            )
+            key = (record.op, record.impl, record.case_id)
+            if usable and (key not in best or prefer(record, best[key])):
+                best[key] = record
+    return best
+
+
+def cmd_fill(args: argparse.Namespace) -> None:
+    """Benchmark every grid combination this machine has no timed row for, into the user cache.
+
+    Dispatch selects on recorded timings, so an unmeasured combination is invisible to it. This
+    walks the grid, skips what is already cached, and measures the rest.
+    """
+    args.device = _target_device(args)
+    device = device_name(args.device)
+    store = Store()
+    work = _work(args.ops, args.backend, args.limit)
+    if not work:
+        raise SystemExit("no matching non-torch backend cases")
+    cached = {} if args.force else _cached(store, work, device)
+    todo = [(op, impl, case) for op, impl, case in work if unmeasured(cached.get((op.name, impl, case.case_id)))]
+    print(f"{len(work)} case-impl pairs: {len(work) - len(todo)} already cached, {len(todo)} to measure")
+    isolation = "in-process" if args.in_process else f"{args.timeout}s/case worker"
+    if not todo:
+        return
+    print(f"measuring {len(todo)} ({isolation}) -> {store.user}")
+    pending: list[Record] = []
+    tally: Counter[str] = Counter()
+    for index, (op, impl, case) in enumerate(todo, start=1):
+        if args.in_process:
+            try:
+                record = op.bench.run_case(impl, case, args.device, args.reps)
+            except Exception as error:
+                record = op.bench.incomplete(impl, case, args.device, f"{type(error).__name__}: {error}")
+        else:
+            record = _isolated(op, impl, case, args.device, args.reps, args.timeout)
+        pending.append(record)
+        tally[record.result.status] += 1
+        if len(pending) >= args.flush or index == len(todo):
+            store.write_user(pending)
+            pending.clear()
+        try:
+            torch.zeros(1, device=args.device).item()
+        except Exception as error:
+            store.write_user(pending)
+            raise SystemExit(f"device poisoned after {index} of {len(todo)}: {type(error).__name__}: {error}") from None
+    print(f"cached {len(todo)} row(s) -> {store.user}")
+    for status, count in tally.most_common():
+        print(f"  {status}: {count}")
+
+
+def cmd_pull(args: argparse.Namespace) -> None:
+    """Fetch the published reports so dispatch and the generated artifacts have evidence."""
+    files, revision = hub.pull(revision=args.revision, repo=args.repo)
+    print(f"{files} report files from {args.repo or hub.repository()} at {revision} -> {BUNDLED_REPORTS}")
+
+
+def cmd_publish(args: argparse.Namespace) -> None:
+    """Publish the current Parquet store and move its pinned revision."""
+    revision = hub.publish(repo=args.repo, message=args.message)
+    print(f"published {hub.repository() if args.repo is None else args.repo} at {revision}; pin updated")
 
 
 def cmd_view(args: argparse.Namespace) -> None:
@@ -310,9 +413,7 @@ def cmd_map(args: argparse.Namespace) -> None:
             rounds = 0
             while rounds < args.rounds:
                 records = store.merged(op.name)
-                todo = plan(
-                    op, records, backend, effort=args.effort, device=args.device, grad=not registered.forward_only
-                )
+                todo = plan(op, records, backend, effort=args.effort, device=args.device, grad=not registered.forward_only)
                 if args.shard:
                     index, count = args.shard
                     todo = todo[index::count]
@@ -376,12 +477,12 @@ def cmd_submit(args: argparse.Namespace) -> None:
     print(submitted.strip())
     merge = (
         f'cd "$SLURM_SUBMIT_DIR" && {shlex.quote(sys.executable)} -m popcorn.bench merge '
-        f"--expect {shards} {shlex.quote(str(shard_dir))}/*.jsonl"
+        f"--expect {shards} {'--publish ' if args.publish else ''}{shlex.quote(str(shard_dir))}/*.jsonl"
     )
     subprocess.run(
         [
             "sbatch",
-            f"--dependency=afterany:{job}",
+            f"--dependency={'afterok' if args.publish else 'afterany'}:{job}",
             *([f"--qos={args.qos}"] if args.qos else []),
             "--job-name=popcorn-merge",
             "--output=logs/popcorn_merge_%j.log",
@@ -421,8 +522,32 @@ def main() -> None:
     merge = sub.add_parser("merge", help="fold shard JSONL files into the reports store")
     merge.add_argument("--expect", type=_positive, help="fail unless this many shard files exist")
     merge.add_argument("--check", action="store_true", help="report shard directories that were never merged; write nothing")
+    merge.add_argument("--publish", action="store_true", help=f"upload the merged reports to {hub.REPO} and update the pin")
     merge.add_argument("sources", nargs="*")
     merge.set_defaults(fn=cmd_merge)
+
+    fill = sub.add_parser("fill", help="benchmark whatever this machine has no timed row for, into the user cache")
+    fill.add_argument("ops", nargs="*", help="ops to measure (default: all registered)")
+    fill.add_argument("--backend", help="restrict to one backend")
+    fill.add_argument("--device", default="cuda")
+    fill.add_argument("--hardware", help=HARDWARE_HELP)
+    fill.add_argument("--reps", type=_positive, default=10)
+    fill.add_argument("--limit", type=_positive, help="subsample the grid to at most N cases per op")
+    fill.add_argument("--timeout", type=_positive, default=30, help="seconds per case worker before it is killed")
+    fill.add_argument("--in-process", action="store_true", help="run cases without a worker: no timeout, crashes end the run")
+    fill.add_argument("--force", action="store_true", help="measure every combination, including ones already cached")
+    fill.add_argument("--flush", type=_positive, default=50, help="write to the cache every N rows")
+    fill.set_defaults(fn=cmd_fill)
+
+    pull = sub.add_parser("pull", help="fetch the published reports from the hub")
+    pull.add_argument("--revision", help=f"revision to fetch (default: the {hub.REVISION} pin, else the default branch)")
+    pull.add_argument("--repo", help=f"dataset repository to fetch from (default: {hub.REPO})")
+    pull.set_defaults(fn=cmd_pull)
+
+    publish = sub.add_parser("publish", help="upload the current Parquet store to the hub and update its pin")
+    publish.add_argument("--repo", help=f"dataset repository to update (default: {hub.REPO})")
+    publish.add_argument("--message", default="Update reports", help="dataset commit message")
+    publish.set_defaults(fn=cmd_publish)
 
     view = sub.add_parser("view", help="render the reports store as a standalone HTML page")
     view.add_argument("--out", default=str(BUNDLED_REPORTS / "index.html"))
@@ -439,6 +564,7 @@ def main() -> None:
     submit.add_argument("--time", default="2:00:00")
     submit.add_argument("--timeout", type=_positive, default=30, help="passed to each array task: seconds per case worker")
     submit.add_argument("--only", help="passed to each array task: restrict to the rows recorded in this JSONL")
+    submit.add_argument("--publish", action="store_true", help="the merge job uploads to the hub and updates the pin")
     submit.add_argument("--dry-run", action="store_true")
     submit.set_defaults(fn=cmd_submit)
 

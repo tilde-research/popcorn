@@ -1,17 +1,8 @@
 #!/usr/bin/env python
-"""Owns the bundled report rows. Nothing else writes them.
+"""Run the benchmark grid on the current CUDA device.
 
-Runs the full correctness + benchmark grid on this machine's GPU: a thin wrapper
-over `python -m popcorn.bench run` putting every registered op (or the ones you
-name) against every available implementation, upserting into
-`src/popcorn/reports/`. All `run` flags pass through, e.g.:
-
-    scripts/bench_hardware.py                     # everything, 10 reps
-    scripts/bench_hardware.py rms_norm swiglu     # two ops
-    scripts/bench_hardware.py --limit 24 --reps 5 # quicker sweep
-
-Derived output is left alone: run update_readme.py for the badges and
-update_site.py for the kernel explorer data once the rows land.
+Usage:
+    uv run python scripts/bench_hardware.py [OP ...] [BENCH OPTIONS]
 """
 
 import sys

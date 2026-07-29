@@ -20,12 +20,15 @@ The filter promotes `src/popcorn/` to the repository root, which is already a st
 
 - [ ] `uv run pytest tests -q` green on CPU; GPU smoke tests green on a CUDA machine
 - [ ] `scripts/format.sh` leaves no diff; `uv run pyright` clean
-- [ ] Full grid on release hardware: `scripts/bench_hardware.py` (stamps `ref_hash`/`impl_hash` fingerprints into the bundled reports and regenerates the README matrix)
-- [ ] `uv build` succeeds; wheel contains `py.typed`, `reports/*.jsonl`, `impls/*.cu`
+- [ ] Pull the current base first: `uv run python -m popcorn.bench pull`
+- [ ] Full grid on release hardware: `scripts/bench_hardware.py` (stamps `ref_hash`/`impl_hash` fingerprints into the reports)
+- [ ] Zero failed/error rows and `uv run python scripts/check_records.py --require-pass` green
+- [ ] `uv run python -m popcorn.bench publish`, then `scripts/update_readme.py`; commit the updated `REVISION`
+- [ ] `uv build` succeeds; wheel contains `py.typed`, `reports/*.parquet`, `reports/REVISION`, `impls/*.cu`
 - [ ] Fresh-venv floor check: `uv venv -p 3.11 && uv pip install --torch-backend=cpu 'torch==2.5.*' dist/popcorn-*.whl && python -c "import popcorn.kernels"`
 - [ ] LICENSE and NOTICE present; wheel metadata shows `License-Expression: Apache-2.0` and bundles both files under `dist-info/licenses/`
 - [ ] Repo public, then switch the README banner to the absolute URL `https://raw.githubusercontent.com/tilde-research/popcorn/main/images/popcorn-banner.png` (PyPI cannot resolve relative paths; raw URLs 404 while the repo is private)
-- [ ] Repo public, then enable the docs site: Settings -> Pages -> Source: GitHub Actions, and re-run the `Site` workflow (it builds `site/` with data from `scripts/export_site_data.py` and deploys to `https://tilde-research.github.io/popcorn/`)
+- [ ] Repo public, then enable the docs site: Settings -> Pages -> Source: GitHub Actions, and run the `Update site` workflow by hand (it builds `site/` with data from `scripts/update_site.py` and deploys to `https://tilde-research.github.io/popcorn/`)
 
 ## 3. Publish
 

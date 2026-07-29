@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/popcorn-banner.png" alt="Popcorn"/>
+  <img src="https://raw.githubusercontent.com/tilde-research/popcorn/main/images/popcorn-banner.png" alt="Popcorn"/>
 </p>
 
 <!-- popcorn:badges -->
@@ -11,7 +11,7 @@
 </p>
 <!-- /popcorn:badges -->
 
-***Popcorn*** 🍿 is a development and dispatch library for high-performance machine learning kernels. It unifies **96 kernels** and more than **100 optimized implementations** behind a single API and automatically selects the fastest backend for your hardware. Every backend is rigorously validated against a reference implementation and benchmarked in a consistent suite, so **speed never comes at the cost of correctness**.
+***Popcorn*** 🍿 is a development and dispatch library for high-performance machine learning kernels. It unifies **96 kernels** and more than **100 optimized implementations** behind a single API, then selects among eligible backends using hardware-specific benchmark records. Each implementation is checked against a PyTorch reference; failed and unmeasured cases remain visible evidence rather than being presented as successful validation.
 Popcorn also ships a growing collection of first-party kernels, along with the environment and harness to build, test, benchmark, and deploy new kernels and backends. Contributions are welcome.
 
 ---
@@ -19,15 +19,8 @@ Popcorn also ships a growing collection of first-party kernels, along with the e
 * [Installation](#installation)
     * [Installing Backends](#installing-backends)
     * [Updating](#updating)
-* [Usage](#usage)
-    * [Quick start](#quick-start)
-    * [Dispatching](#dispatching)
-    * [Registration](#registration)
-    * [Validation](#validation)
-    * [Benchmarking](#benchmarking)
-    * [Tuning](#tuning)
-    * [torch.compile](#torchcompile)
-* [Supported kernels](#supported-kernels)
+* [Documentation](#documentation)
+* [Supported Kernels](#supported-kernels)
 * [Limitations](#limitations)
 * [Contributing](#contributing)
 * [Acknowledgement](#acknowledgement)
@@ -60,34 +53,51 @@ Due to common overloading of some frequently used terms, consult the following d
 
 ## Installation
 
-Install using `uv` with:
+Popcorn is not on PyPI yet. Install it from GitHub using `uv` with:
 ```bash
-uv add popcorn              # first-party only
-uv add "popcorn[liger]"     # + Liger-Kernel backends
-uv add "popcorn[fla]"       # + FLA backends
-uv add "popcorn[all]"       # every backend
+uv add "popcorn @ git+https://github.com/tilde-research/popcorn"           # first-party only
+uv add "popcorn[liger] @ git+https://github.com/tilde-research/popcorn"    # + Liger-Kernel backends
+uv add "popcorn[fla] @ git+https://github.com/tilde-research/popcorn"      # + FLA backends
+```
+
+Add one extra per backend you want. There is no "everything" extra: the backends pin mutually exclusive requirements, so installing them together does not resolve.
+
+Installing also fetches the benchmark cache that dispatch selects implementations with, from the [popcorn-reports](https://huggingface.co/datasets/tilde-research/popcorn-reports) dataset at the revision this version pins. Set `POPCORN_SKIP_REPORTS=1` to install without it; popcorn then falls back to the reference for every call and says so. Refresh it at any time with:
+```bash
+uv run python -m popcorn.bench pull
 ```
 
 A backend is eligible only when its package is installed at a declared supported version: auto-dispatch skips unavailable ones, and forcing one raises with the install hint or version error. First-party kernels (the `popcorn` backend) are always included.
 
-> [!NOTE]
-> You may be able to use `pip` to install Popcorn (with `pip install popcorn`) but this path is not officially supported.
+### Benchmarking on your own hardware
+The shipped cache covers the hardware it was recorded on. To measure the combinations your machine has no timing for and add them to your local cache:
+```bash
+uv run python -m popcorn.bench fill            # every op; --limit N to subsample large grids
+```
+Already-cached combinations are skipped; pass `--force` to re-measure them. Dispatch picks these up on the next call.
 
 ### Installing Backends
 To install the prerequisites for an additional backend:
 ```bash
-uv add "popcorn[<new_extra>]"
+uv add "popcorn[<new_extra>] @ git+https://github.com/tilde-research/popcorn"
 ```
 
 ### Updating
-Update using `uv` with:
+Re-resolving the git dependency rebuilds the package, which refreshes the cache with it:
 ```bash
-uv add --upgrade popcorn
+uv lock --upgrade-package popcorn && uv sync
 ```
 
 ## Documentation
 
+- [Documentation](https://tilde-research.github.io/popcorn/docs/)
+- [Kernel explorer](https://tilde-research.github.io/popcorn/kernels/)
 
+## Supported Kernels
+
+The current registry covers 96 kernels and 128 implementations. Browse the
+[kernel explorer](https://tilde-research.github.io/popcorn/kernels/) for signatures,
+available backends, validation records, and measured performance.
 
 ## Limitations
 
@@ -100,7 +110,7 @@ Popcorn benchmarks kernels in isolation. This is useful for comparing implementa
 It's important to keep in mind that dispatch currently optimizes recorded execution time, not peak memory. For some workloads, we may prefer a slower implementation with a smaller memory footprint. Benchmark representative model code and explicitly tune or select a backend when latency and memory requirements are both important.
 
 ## Contributing
-New kernels and backends follow a guided flow: [CONTRIBUTING.md](CONTRIBUTING.md). Benchmarks come from contributors' machines; run the grid on your hardware and commit the reports.
+New kernels and backends follow a guided flow: [CONTRIBUTING.md](CONTRIBUTING.md). Benchmarks come from contributors' machines; run the grid on your hardware and include its matrix rows for review. Maintainers publish accepted report evidence to the pinned dataset.
 
 ## Acknowledgement
 
