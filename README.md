@@ -1,3 +1,6 @@
+> [!WARNING]
+> This repository has been made public for review, but it is not yet ready for use. The API, behavior, and documentation may change. Please wait for the official release before using it.
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/tilde-research/popcorn/main/images/popcorn-banner.png" alt="Popcorn"/>
 </p>
