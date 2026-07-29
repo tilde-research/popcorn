@@ -93,13 +93,13 @@ uv lock --upgrade-package popcorn && uv sync
 
 ## Documentation
 
-- [Documentation](https://tilde-research.github.io/popcorn/docs/)
-- [Kernel explorer](https://tilde-research.github.io/popcorn/kernels/)
+- [Documentation](https://tilde-research.github.io/popcorn/docs)
+- [Kernel explorer](https://tilde-research.github.io/popcorn/kernels)
 
 ## Supported Kernels
 
 The current registry covers 96 kernels and 128 implementations. Browse the
-[kernel explorer](https://tilde-research.github.io/popcorn/kernels/) for signatures,
+[kernel explorer](https://tilde-research.github.io/popcorn/kernels) for signatures,
 available backends, validation records, and measured performance.
 
 ## Limitations

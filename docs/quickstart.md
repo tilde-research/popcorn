@@ -68,4 +68,4 @@ output = rms_norm(x, weight, backend="liger")
 - [Dispatching](./dispatching.md) — how a call resolves to one implementation
 - [Validation](./validation.md) — compare implementations against the reference
 - [Benchmarking](./benchmarking.md) — record timings and route on data
-- [Kernel explorer](https://tilde-research.github.io/popcorn/kernels/) — every kernel: math, backends, measured performance
+- [Kernel explorer](https://tilde-research.github.io/popcorn/kernels) — every kernel: math, backends, measured performance

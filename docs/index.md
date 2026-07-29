@@ -36,4 +36,4 @@ Some frequently used terms are overloaded; Popcorn uses them precisely:
 - [Optimization loop](./loop.md) — iterate on a candidate kernel with crash-isolated evals
 
 Kernel cards with math, backends, and measured performance live in the
-[kernel explorer](https://tilde-research.github.io/popcorn/kernels/).
+[kernel explorer](https://tilde-research.github.io/popcorn/kernels).
