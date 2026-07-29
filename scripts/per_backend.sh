@@ -21,9 +21,9 @@ for backend in $BACKENDS; do
     uv venv --clear
     # POPCORN_SKIP_REPORTS is deliberately unset: the build hook fetches the pinned reports,
     # and without them every dispatch would resolve to the torch reference.
-    uv pip install --quiet "--torch-backend=$TORCH_BACKEND" -e ".[$backend]"
+    uv pip install --quiet "--torch-backend=$TORCH_BACKEND" -e ".[$backend]" --group dev
     echo "--- $backend: $*"
-    if uv run --no-sync "$@"; then
+    if POPCORN_TEST_BACKEND="$backend" uv run --no-sync "$@"; then
         echo "--- $backend: ok"
     else
         echo "--- $backend: FAILED" >&2

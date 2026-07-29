@@ -17,8 +17,10 @@ from popcorn import KERNELS
 from popcorn.bench import Case, Gauge, compare, hub, store
 from popcorn.bench.__main__ import (
     _cached,
+    _fill_pending,
     _impl,
     _isolated,
+    _require_clean,
     _target_device,
     _work,
     cmd_merge,
@@ -239,7 +241,9 @@ def test_concurrent_store_upserts_are_atomic(tmp_path):
 
 def test_published_rows_round_trip_through_parquet(tmp_path):
     records = [_record(), _record("fail", "other")]
+    (tmp_path / store.FETCHED).write_text("old-pin\n")
     write(records, tmp_path, PUBLISHED)
+    assert not (tmp_path / store.FETCHED).exists()
     assert (tmp_path / f"op{PUBLISHED}").exists()
     assert [record.to_dict() for record in read(tmp_path)] == [record.to_dict() for record in records]
 
@@ -318,9 +322,16 @@ def test_publish_command_forwards_the_repository_and_message(monkeypatch, capsys
         return "cafe1234"
 
     monkeypatch.setattr(hub, "publish", publish)
+    monkeypatch.setitem(cmd_publish.__globals__, "_require_passing_reports", lambda: None)
     cmd_publish(Namespace(repo="org/reports", message="Fresh grid"))
     assert called == {"repo": "org/reports", "message": "Fresh grid"}
     assert "org/reports at cafe1234" in capsys.readouterr().out
+
+
+def test_publish_rejects_unsuccessful_rows():
+    with pytest.raises(SystemExit, match="refusing to publish.*error=1"):
+        _require_clean([_record("error")])
+    _require_clean([_record("pass"), _record("skip")])
 
 
 def test_unmeasured_wants_a_timing_even_when_correctness_already_passed():
@@ -332,6 +343,12 @@ def test_unmeasured_wants_a_timing_even_when_correctness_already_passed():
     assert not unmeasured(_record("fail"))  # a verdict rerunning will not change
     assert unmeasured(_record("error"))  # the harness failed, correctness unknown
     assert not unmeasured(timed, benchmark=False)
+
+
+def test_fill_retains_stable_skip_and_oom_evidence():
+    assert not _fill_pending(_record("skip"))
+    assert not _fill_pending(_record("oom"))
+    assert _fill_pending(_record("error"))
 
 
 def test_fill_counts_only_rows_this_machine_could_have_produced(tmp_path):
@@ -346,7 +363,8 @@ def test_fill_counts_only_rows_this_machine_could_have_produced(tmp_path):
         op.fingerprint,
         _impl(op, "fla").fingerprint,
     )
-    result = Result(status="pass", grad=False, benchmarked=True, bench={"fwd_ms": 1.0})
+    grad = not _impl(op, "fla").forward_only
+    result = Result(status="pass", grad=grad, benchmarked=True, bench={"fwd_ms": 1.0})
     removed = Environment("TestDevice", torch.__version__, None, environment.ts, op.fingerprint, "old")
     write(
         [
@@ -359,7 +377,7 @@ def test_fill_counts_only_rows_this_machine_could_have_produced(tmp_path):
     store = Store(bundled=tmp_path, user=tmp_path / "user")
     work = [(op, "fla", case)]
     cached = _cached(store, work, "TestDevice")
-    assert not unmeasured(cached[(op.name, "fla", case.case_id)])
+    assert not unmeasured(cached[(op.name, "fla", case.case_id, grad)])
     assert _cached(store, work, "OtherDevice") == {}
 
 
@@ -368,7 +386,8 @@ def test_fill_re_measures_only_what_a_fingerprint_change_invalidated(tmp_path):
     and only its rows, stop counting as cached."""
     op = KERNELS["rms_norm"]
     case = cases(op, 1)[0]
-    result = Result(status="pass", grad=False, benchmarked=True, bench={"fwd_ms": 1.0})
+    grad = not _impl(op, "fla").forward_only
+    result = Result(status="pass", grad=grad, benchmarked=True, bench={"fwd_ms": 1.0})
 
     def row(impl: str, impl_hash: str | None) -> Record:
         environment = Environment(
@@ -378,8 +397,8 @@ def test_fill_re_measures_only_what_a_fingerprint_change_invalidated(tmp_path):
 
     write([row("fla", _impl(op, "fla").fingerprint), row("liger", "stale")], tmp_path)
     cached = _cached(Store(bundled=tmp_path, user=tmp_path / "user"), [(op, "fla", case), (op, "liger", case)], "TestDevice")
-    assert (op.name, "fla", case.case_id) in cached  # untouched adapter stays cached
-    assert (op.name, "liger", case.case_id) not in cached  # edited adapter is measured again
+    assert (op.name, "fla", case.case_id, grad) in cached  # untouched adapter stays cached
+    assert (op.name, "liger", case.case_id, grad) not in cached  # edited adapter is measured again
 
 
 def test_the_build_hook_names_the_same_dataset_as_the_hub():

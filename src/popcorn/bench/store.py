@@ -3,11 +3,12 @@
 import json
 import os
 import warnings
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -23,6 +24,7 @@ except ImportError:
 BUNDLED_REPORTS = Path(__file__).parents[1] / "reports"
 PUBLISHED = ".parquet"
 SCRATCH = ".jsonl"
+FETCHED = ".revision"
 # Nested fields ride as JSON text in one column each: the readers want whole rows back,
 # not projections into a gauge, and a stable string beats a struct that shifts with the model.
 NESTED = ("config", "fwd", "bwd", "bench")
@@ -147,6 +149,40 @@ def bundled_path(directory: Path, op: str) -> Path:
     return published if published.exists() else directory / f"{op}{SCRATCH}"
 
 
+def audit_records(ops: Iterable[Any], directory: Path = BUNDLED_REPORTS) -> tuple[int, int, dict[str, list[str]]]:
+    """Count current and passing implementation pairs, with missing/stale details."""
+    current = 0
+    passing = 0
+    problems = defaultdict(list)
+    for op in ops:
+        rows = read_file(bundled_path(directory, op.name))
+        for impl in op._impls:
+            if impl.name == "torch":
+                continue
+            pair = f"{op.name}:{impl.name}"
+            present = [row for row in rows if row.impl == impl.name]
+            fresh = [
+                row
+                for row in present
+                if (op.fingerprint is None or row.environment.ref_hash == op.fingerprint)
+                and (impl.fingerprint is None or row.environment.impl_hash == impl.fingerprint)
+            ]
+            if not fresh:
+                kind = "stale" if present else "missing"
+                detail = f" ({len(present)} rows, none matching the current fingerprint)" if present else ""
+                problems[kind].append(f"{pair}{detail}")
+                continue
+            current += 1
+            if any(row.result.status == "pass" for row in fresh):
+                passing += 1
+            else:
+                statuses = ", ".join(
+                    f"{status}={count}" for status, count in sorted(Counter(row.result.status for row in fresh).items())
+                )
+                problems["no_pass"].append(f"{pair} ({statuses})")
+    return current, passing, dict(problems)
+
+
 def _dump(records: list[Record], path: Path, suffix: str) -> None:
     if suffix == PUBLISHED:
         write_parquet(records, path)
@@ -157,6 +193,8 @@ def _dump(records: list[Record], path: Path, suffix: str) -> None:
 def write(records: Iterable[Record], directory: Path | str, suffix: str = SCRATCH) -> None:
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
+    if suffix == PUBLISHED:
+        (directory / FETCHED).unlink(missing_ok=True)
     grouped = defaultdict(list)
     for record in records:
         grouped[record.op].append(record)

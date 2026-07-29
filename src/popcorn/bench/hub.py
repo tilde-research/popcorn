@@ -6,11 +6,10 @@ from pathlib import Path
 
 from huggingface_hub import HfApi, snapshot_download
 
-from popcorn.bench.store import BUNDLED_REPORTS, PUBLISHED
+from popcorn.bench.store import BUNDLED_REPORTS, FETCHED, PUBLISHED
 
 REPO = "tilde-research/popcorn-reports"
 REVISION = "REVISION"
-FETCHED = ".revision"
 
 
 def repository() -> str:

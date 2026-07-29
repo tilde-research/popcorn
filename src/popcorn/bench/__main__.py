@@ -24,6 +24,7 @@ from popcorn.bench.store import (
     BUNDLED_REPORTS,
     PUBLISHED,
     Store,
+    audit_records,
     matching,
     prefer,
     read,
@@ -35,7 +36,7 @@ from popcorn.bench.store import (
 from popcorn.bench.viewer import render
 from popcorn.core.config import device_name
 from popcorn.core.dispatcher import Dispatcher, Implementation
-from popcorn.core.sources import installed_version
+from popcorn.core.sources import available, installed_version
 
 SBATCH = """\
 #!/bin/bash
@@ -267,6 +268,28 @@ def _pending(directory: Path, stored: Mapping[tuple, Record]) -> tuple[int, int,
     return rows, pending, ""
 
 
+def _require_clean(records: list[Record]) -> None:
+    bad = [
+        record
+        for record in records
+        if record.result.status in ("fail", "crash", "error", "timeout") or record.result.bench_error
+    ]
+    if bad:
+        counts = Counter(record.result.status if not record.result.bench_error else "bench_error" for record in bad)
+        summary = ", ".join(f"{status}={count}" for status, count in sorted(counts.items()))
+        raise SystemExit(f"refusing to publish {len(bad)} unsuccessful row(s): {summary}")
+
+
+def _require_passing_reports() -> None:
+    current, passing, problems = audit_records(KERNELS.values())
+    total = current + len(problems.get("missing", [])) + len(problems.get("stale", []))
+    if passing != total:
+        raise SystemExit(
+            f"refusing to publish: only {passing}/{total} implementations have a current passing row; "
+            "run `uv run python scripts/check_records.py --require-pass` for details"
+        )
+
+
 def cmd_merge(args: argparse.Namespace) -> None:
     if args.check:
         if args.sources:
@@ -296,8 +319,11 @@ def cmd_merge(args: argparse.Namespace) -> None:
     records = [record for source in args.sources for record in read_file(source)]
     if not records:
         raise SystemExit("no report rows to merge")
+    if args.publish:
+        _require_clean(records)
     _publish(records)
     if args.publish:
+        _require_passing_reports()
         revision = hub.publish(message=f"Merge {len(records)} rows from {len(args.sources)} shards")
         print(f"published {hub.repository()} at {revision}; pin updated")
 
@@ -306,13 +332,13 @@ def _impl(op: Dispatcher, name: str) -> Implementation:
     return next(candidate for candidate in op._impls if candidate.name == name)
 
 
-def _cached(store: Store, work: list[tuple[Dispatcher, str, Case]], device: str) -> dict[tuple[str, str, str], Record]:
+def _cached(store: Store, work: list[tuple[Dispatcher, str, Case]], device: str) -> dict[tuple[str, str, str, bool], Record]:
     """The best row this machine already holds per (op, impl, case), ignoring rows it cannot use.
 
     Evidence from another GPU, Torch build, backend version, or revision of the code says
     nothing about what to run here, so those rows are not treated as cached.
     """
-    best: dict[tuple[str, str, str], Record] = {}
+    best: dict[tuple[str, str, str, bool], Record] = {}
     for name in dict.fromkeys(op.name for op, _, _ in work):
         op = KERNELS[name]
         implementations = {impl.name: impl for impl in op._impls}
@@ -327,10 +353,15 @@ def _cached(store: Store, work: list[tuple[Dispatcher, str, Case]], device: str)
                 and matching(op.fingerprint, environment.ref_hash)
                 and matching(implementation.fingerprint, environment.impl_hash)
             )
-            key = (record.op, record.impl, record.case_id)
+            key = (record.op, record.impl, record.case_id, record.result.grad)
             if usable and (key not in best or prefer(record, best[key])):
                 best[key] = record
     return best
+
+
+def _fill_pending(record: Record | None) -> bool:
+    """Retry absent and inconclusive work, but retain stable rejection and OOM evidence."""
+    return record is None or (record.result.status not in ("skip", "oom") and unmeasured(record))
 
 
 def cmd_fill(args: argparse.Namespace) -> None:
@@ -342,11 +373,15 @@ def cmd_fill(args: argparse.Namespace) -> None:
     args.device = _target_device(args)
     device = device_name(args.device)
     store = Store()
-    work = _work(args.ops, args.backend, args.limit)
+    work = [(op, impl, case) for op, impl, case in _work(args.ops, args.backend, args.limit) if available(impl)]
     if not work:
-        raise SystemExit("no matching non-torch backend cases")
+        raise SystemExit("no matching installed non-torch backend cases")
     cached = {} if args.force else _cached(store, work, device)
-    todo = [(op, impl, case) for op, impl, case in work if unmeasured(cached.get((op.name, impl, case.case_id)))]
+    todo = [
+        (op, impl, case)
+        for op, impl, case in work
+        if _fill_pending(cached.get((op.name, impl, case.case_id, not _impl(op, impl).forward_only)))
+    ]
     print(f"{len(work)} case-impl pairs: {len(work) - len(todo)} already cached, {len(todo)} to measure")
     isolation = "in-process" if args.in_process else f"{args.timeout}s/case worker"
     if not todo:
@@ -385,6 +420,7 @@ def cmd_pull(args: argparse.Namespace) -> None:
 
 def cmd_publish(args: argparse.Namespace) -> None:
     """Publish the current Parquet store and move its pinned revision."""
+    _require_passing_reports()
     revision = hub.publish(repo=args.repo, message=args.message)
     print(f"published {hub.repository() if args.repo is None else args.repo} at {revision}; pin updated")
 
