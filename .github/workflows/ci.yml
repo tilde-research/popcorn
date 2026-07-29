@@ -17,7 +17,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: uv venv
+      - run: uv venv --clear
       - run: uv pip install --group dev
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check .
@@ -29,7 +29,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: uv venv
+      - run: uv venv --clear
       - run: uv pip install --torch-backend=cpu -e . --group dev
         env:
           POPCORN_SKIP_REPORTS: "1"
@@ -46,7 +46,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: uv venv --python ${{ matrix.python }}
+      - run: uv venv --clear --python ${{ matrix.python }}
       - run: uv pip install --torch-backend=cpu -e . --group dev
         env:
           POPCORN_SKIP_REPORTS: "1"
@@ -74,7 +74,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: uv venv
+      - run: uv venv --clear
       - run: uv pip install --torch-backend=cpu -e "${{ matrix.target }}" --group dev
         env:
           POPCORN_SKIP_REPORTS: "1"
@@ -91,7 +91,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: uv venv
+      - run: uv venv --clear
       - run: uv pip install --torch-backend=cpu -e ".[fla,liger]" --group dev
         env:
           POPCORN_SKIP_REPORTS: "1"
@@ -106,7 +106,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: uv venv
+      - run: uv venv --clear
       # Badges and coverage are both derived from the pinned report cache, which the
       # install fetches (see setup.py).
       - run: uv pip install --torch-backend=cpu -e .
