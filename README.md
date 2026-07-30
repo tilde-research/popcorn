@@ -35,19 +35,16 @@ Popcorn also ships a growing collection of first-party kernels, along with the e
 
 Install Popcorn from PyPI using `uv`:
 ```bash
-uv pip install --torch-backend=auto popcorn           # first-party only
-uv pip install --torch-backend=auto "popcorn[liger]"  # + Liger-Kernel backends
-uv pip install --torch-backend=auto "popcorn[fla]"    # + FLA backends
+uv pip install popcorn           # first-party only
+uv pip install "popcorn[liger]"  # + Liger-Kernel backends
+uv pip install "popcorn[fla]"    # + FLA backends
 ```
 
-`--torch-backend=auto` detects the available CPU, CUDA, ROCm, or XPU environment and selects the
-matching PyTorch wheel index.
+> [!NOTE]
+> Add `--torch-backend=auto` to let `uv` select a PyTorch build for your hardware.
 
 > [!WARNING]
-> `pip install popcorn` is not generally supported. Install the correct PyTorch build for your
-> hardware first, then install Popcorn with pip. We recommend `uv` because
-> `--torch-backend=auto` selects PyTorch for you. The `fa3` extra must be installed from source;
-> see [CONTRIBUTING.md](CONTRIBUTING.md).
+> `pip install popcorn` may work but is not generally supported. Install the desired PyTorch build for your hardware first, then install Popcorn with pip.
 
 Add one extra per backend you want. There is no "everything" extra: the backends pin mutually exclusive requirements, so installing them together does not resolve.
 
@@ -68,13 +65,13 @@ Already-cached combinations are skipped; pass `--force` to re-measure them. Disp
 ### Installing Backends
 To install the prerequisites for an additional backend:
 ```bash
-uv pip install --torch-backend=auto "popcorn[<new_extra>]"
+uv pip install "popcorn[<new_extra>]"
 ```
 
 ### Updating
 Upgrade Popcorn and refresh its pinned report cache with:
 ```bash
-uv pip install --upgrade --torch-backend=auto popcorn
+uv pip install --upgrade popcorn
 ```
 ## Limitations
 
