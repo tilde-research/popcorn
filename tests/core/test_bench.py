@@ -30,7 +30,7 @@ from popcorn.bench.__main__ import (
 )
 from popcorn.bench.grid import cases, make_inputs
 from popcorn.bench.model import Environment, Record, Result
-from popcorn.bench.readme import matrix
+from popcorn.bench.readme import badges, matrix
 from popcorn.bench.store import PUBLISHED, Store, bundled_path, read, read_file, unmeasured, write
 from popcorn.bench.viewer import render
 from popcorn.core import Dispatcher
@@ -55,6 +55,12 @@ def _op():
     op = Dispatcher(reference)
     op.register("alt")(lambda x: x + 1)
     return op
+
+
+def test_readme_counts_reference_as_an_implementation():
+    row = badges([], {"op": _op()})
+    assert "implementations-2-blue" in row
+    assert "backends-1-blue" in row
 
 
 def test_compare_is_callable_first():

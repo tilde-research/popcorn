@@ -34,8 +34,6 @@ html > body[data-scroll-locked] {
 .pc-site-header .nd-nav-title {
   display: inline-flex;
   align-items: center;
-  width: 4.5rem;
-  height: 1.25rem;
   flex-shrink: 0;
 }
 
@@ -69,6 +67,14 @@ html > body[data-scroll-locked] {
 @media (max-width: 767.98px) {
   .pc-site-header [data-search-full] {
     display: none !important;
+  }
+
+  .pc-site-header .pc-sidebar-slot {
+    display: none !important;
+  }
+
+  #nd-notebook-layout {
+    display: block;
   }
 }
 

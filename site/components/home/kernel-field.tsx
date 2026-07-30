@@ -3,7 +3,7 @@
 import type { CSSProperties } from 'react';
 import { basePath } from '@/lib/shared';
 
-const MARK = `${basePath}/popcorn-logo-dark.png`;
+const MARK = `${basePath}/popcorn-logo.png`;
 
 const KERNELS = [
   { top: '12%', left: '8%', size: 56, dur: '16s', delay: '0s', pop: true, popDur: '8s', popDelay: '1.2s' },

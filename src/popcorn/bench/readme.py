@@ -79,10 +79,10 @@ def matrix(records: Iterable[Record]) -> str:
 
 def badges(records: Iterable[Record], ops: Mapping[str, Any]) -> str:
     """Shields.io badge row: registered counts plus the recorded grid size."""
-    names = [impl.name for op in ops.values() for impl in op._impls if impl.name != "torch"]
+    names = [impl.name for op in ops.values() for impl in op._impls]
     counts = (
         ("kernels", str(len(ops))),
-        ("backends", str(len({name.split(":")[0] for name in names}))),
+        ("backends", str(len({name.split(":")[0] for name in names if name != "torch"}))),
         ("implementations", str(len(names))),
         ("grid rows", f"{sum(1 for _ in records):,}".replace(",", "%2C")),
     )

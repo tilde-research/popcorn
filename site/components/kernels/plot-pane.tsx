@@ -42,14 +42,14 @@ function Segmented({
   mono?: boolean;
 }) {
   return (
-    <div className={`flex overflow-hidden rounded-lg border text-xs ${mono ? 'font-mono' : ''}`}>
+    <div className={`flex max-w-full overflow-x-auto rounded-lg border text-xs ${mono ? 'font-mono' : ''}`}>
       {options.map((option) => (
         <button
           key={option}
           disabled={disabled.includes(option)}
           onClick={() => onChange(option)}
           title={labels?.[option] && labels[option] !== option ? option : undefined}
-          className={`px-2.5 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+          className={`shrink-0 px-2.5 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
             option === value ? 'bg-fd-primary text-fd-primary-foreground' : 'bg-fd-card hover:bg-fd-accent'
           }`}
         >
@@ -62,7 +62,7 @@ function Segmented({
 
 function Control({ label, children, mono = true }: { label: string; children: React.ReactNode; mono?: boolean }) {
   return (
-    <label className="flex items-center gap-2">
+    <label className="flex min-w-0 max-w-full items-center gap-2">
       <span className={`text-xs text-fd-muted-foreground ${mono ? 'font-mono' : ''}`}>{label}</span>
       {children}
     </label>

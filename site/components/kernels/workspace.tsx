@@ -51,16 +51,18 @@ function InfoPane({ k }: { k: Kernel }) {
         <div className="ms-auto flex items-center gap-2 text-xs">
           <a
             href={`https://github.com/${gitConfig.user}/${gitConfig.repo}/blob/${gitConfig.branch}/src/popcorn/kernels/${k.name}.py`}
-            className="flex items-center gap-1.5 rounded-lg border bg-fd-card px-2.5 py-1.5 transition-colors hover:bg-fd-accent"
+            aria-label="View source"
+            className="flex items-center gap-1.5 rounded-lg border bg-fd-card p-2 transition-colors hover:bg-fd-accent sm:px-2.5 sm:py-1.5"
           >
-            <FileCode className="size-3.5" /> source
+            <FileCode className="size-3.5" /> <span className="max-sm:hidden">source</span>
           </a>
           <a
             href={`${basePath}/data/${k.name}.json`}
             download={`${k.name}.json`}
-            className="flex items-center gap-1.5 rounded-lg border bg-fd-card px-2.5 py-1.5 transition-colors hover:bg-fd-accent"
+            aria-label="Download benchmark data"
+            className="flex items-center gap-1.5 rounded-lg border bg-fd-card p-2 transition-colors hover:bg-fd-accent sm:px-2.5 sm:py-1.5"
           >
-            <Download className="size-3.5" /> data
+            <Download className="size-3.5" /> <span className="max-sm:hidden">data</span>
           </a>
         </div>
       </div>
@@ -79,7 +81,7 @@ function InfoPane({ k }: { k: Kernel }) {
         </p>
       )}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-        <table className="h-fit w-full text-sm">
+        <table className="h-fit w-full table-fixed text-sm">
           <thead>
             <tr className="border-b text-left text-xs text-fd-muted-foreground">
               <th className="py-2 pr-4 font-medium">backend</th>
@@ -91,7 +93,9 @@ function InfoPane({ k }: { k: Kernel }) {
             {k.impls.map((b) => (
               <tr key={b.name} className="border-b last:border-0">
                 <td className="py-2 pr-4 font-mono font-semibold">{b.name}</td>
-                <td className="py-2 pr-4 font-mono text-xs text-fd-muted-foreground">{b.source ?? 'reference'}</td>
+                <td className="break-all py-2 pr-4 font-mono text-xs text-fd-muted-foreground">
+                  {b.source ?? 'reference'}
+                </td>
                 <td className="py-2 text-xs text-fd-muted-foreground">
                   {b.forward_only ? 'forward-only' : 'forward + backward'}
                 </td>
@@ -165,6 +169,7 @@ export function Workspace({ entries }: { entries: KernelIndexEntry[] }) {
   const pinnedEntries = pinned
     .map((name) => entries.find((e) => e.name === name))
     .filter((e): e is KernelIndexEntry => e !== undefined);
+  const selectedEntry = entries.find((entry) => entry.name === selected);
 
   const Row = ({ entry, isPinned }: { entry: KernelIndexEntry; isPinned: boolean }) => (
     <div
@@ -207,8 +212,41 @@ export function Workspace({ entries }: { entries: KernelIndexEntry[] }) {
   );
 
   return (
-    <main className="flex h-[calc(100dvh-3.5rem)] overflow-hidden">
-      <aside className="flex w-1/4 min-w-60 flex-col border-e">
+    <main className="flex min-h-[calc(100dvh-3.5rem)] flex-col overflow-x-clip md:h-[calc(100dvh-3.5rem)] md:min-h-0 md:flex-row md:overflow-hidden">
+      <div className="sticky top-14 z-20 flex items-center gap-2 border-b bg-fd-background/95 p-3 backdrop-blur md:hidden">
+        <label htmlFor="kernel-select" className="sr-only">
+          Kernel
+        </label>
+        <select
+          id="kernel-select"
+          value={selected ?? ''}
+          onChange={(event) => setSelected(event.target.value)}
+          className="min-w-0 flex-1 rounded-lg border bg-fd-card px-3 py-2 font-mono text-sm outline-none focus:ring-2 focus:ring-fd-ring"
+        >
+          <option value="" disabled>
+            Select a kernel
+          </option>
+          {entries.map((entry) => (
+            <option key={entry.name} value={entry.name}>
+              {entry.name} · {entry.impls.length} implementation{entry.impls.length === 1 ? '' : 's'}
+            </option>
+          ))}
+        </select>
+        {selectedEntry ? (
+          <button
+            type="button"
+            aria-label={pinned.includes(selectedEntry.name) ? 'Unpin kernel' : 'Pin kernel to compare'}
+            title={pinned.includes(selectedEntry.name) ? 'Unpin' : `Pin to compare (max ${MAX_PINNED})`}
+            onClick={() => togglePin(selectedEntry.name)}
+            className={`inline-flex size-9 shrink-0 items-center justify-center rounded-lg border bg-fd-card ${
+              pinned.includes(selectedEntry.name) ? 'text-fd-primary' : 'text-fd-muted-foreground'
+            }`}
+          >
+            <Pin className={`size-4 ${pinned.includes(selectedEntry.name) ? 'fill-current' : ''}`} />
+          </button>
+        ) : null}
+      </div>
+      <aside className="hidden w-1/4 min-w-60 flex-col border-e md:flex">
         <div className="flex flex-col gap-2 border-b p-3">
           <input
             value={query}
@@ -251,7 +289,7 @@ export function Workspace({ entries }: { entries: KernelIndexEntry[] }) {
         </div>
       </aside>
       <section className="flex min-w-0 flex-1 flex-col">
-        <div className="h-1/2 min-h-0 overflow-y-auto border-b p-5">
+        <div className="border-b p-4 md:h-1/2 md:min-h-0 md:overflow-y-auto md:p-5">
           {info ? (
             <InfoPane k={info} />
           ) : (
@@ -260,7 +298,7 @@ export function Workspace({ entries }: { entries: KernelIndexEntry[] }) {
             </p>
           )}
         </div>
-        <div className="h-1/2 min-h-0 overflow-y-auto p-5">
+        <div className="min-h-[36rem] p-4 md:h-1/2 md:min-h-0 md:overflow-y-auto md:p-5">
           <PlotPane kernels={kernels} />
         </div>
       </section>

@@ -3,17 +3,25 @@ import { Hero } from '@/components/home/hero';
 import { InstallSnippet } from '@/components/home/install-snippet';
 import { SwapDiff } from '@/components/home/swap-diff';
 import { gitConfig } from '@/lib/shared';
+import { kernelIndex } from '@/lib/kernels-server';
 
-const STATS = [
-  { value: '96', label: 'kernels' },
-  { value: '6', label: 'backends' },
-  { value: '128', label: 'implementations' },
-] as const;
+export default async function HomePage() {
+  const kernels = await kernelIndex();
+  const implementations = kernels.flatMap((kernel) => kernel.impls);
+  const stats = [
+    { value: kernels.length, label: 'kernels' },
+    {
+      value: new Set(
+        implementations.filter((name) => name !== 'torch').map((name) => name.split(':')[0]),
+      ).size,
+      label: 'backends',
+    },
+    { value: implementations.length, label: 'implementations' },
+  ] as const;
 
-export default function HomePage() {
   return (
     <div className="pc-home flex flex-1 flex-col">
-      <Hero />
+      <Hero implementationCount={implementations.length} />
 
       <section className="border-t border-fd-border px-6 py-20 sm:px-10">
         <div className="mx-auto max-w-3xl">
@@ -44,7 +52,7 @@ export default function HomePage() {
             Explore the grid.
           </h2>
           <dl className="mt-12 flex flex-wrap items-start justify-center gap-x-16 gap-y-8">
-            {STATS.map((s) => (
+            {stats.map((s) => (
               <div key={s.label}>
                 <dt className="font-mono text-4xl text-fd-foreground tabular-nums sm:text-5xl">
                   {s.value}

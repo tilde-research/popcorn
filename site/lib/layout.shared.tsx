@@ -2,34 +2,21 @@ import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
 import { SiteHeader } from '@/components/site-header';
 import { appName, basePath, gitConfig } from './shared';
 
-/** Fixed box — both theme PNGs share exact geometry so icons never shift. */
+/** Fixed box; the monochrome asset is inverted when the navigation is dark. */
 export function NavTitle({ forceDark = false }: { forceDark?: boolean }) {
   return (
     <span
-      className="nd-nav-title relative inline-block h-5 w-[4.5rem] shrink-0 overflow-hidden"
+      className="nd-nav-title relative inline-flex h-6 w-[5.25rem] shrink-0 translate-y-px items-center overflow-hidden sm:h-7 sm:w-24"
       aria-label={appName}
     >
-      {!forceDark && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={`${basePath}/popcorn-name-light.png`}
-          alt=""
-          width={72}
-          height={20}
-          className="absolute inset-0 h-5 w-[4.5rem] object-contain object-left dark:hidden"
-        />
-      )}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src={`${basePath}/popcorn-name-dark.png`}
+        src={`${basePath}/popcorn-name.png`}
         alt=""
-        width={72}
-        height={20}
-        className={
-          forceDark
-            ? 'absolute inset-0 h-5 w-[4.5rem] object-contain object-left'
-            : 'absolute inset-0 hidden h-5 w-[4.5rem] object-contain object-left dark:block'
-        }
+        width={96}
+        height={28}
+        className={`absolute inset-0 h-full w-full object-contain object-left ${
+          forceDark ? 'invert' : 'dark:invert'
+        }`}
       />
     </span>
   );

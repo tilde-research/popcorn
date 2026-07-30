@@ -2,7 +2,7 @@
 
 Answer the question at each step and follow the arrow. Registration is validated at import time and correctness is graded by the harness, so mistakes raise errors that say what to fix.
 
-> [!INFO]
+> [!IMPORTANT]
 > By contributing you agree that your contributions are licensed under [Apache-2.0](LICENSE). Adapted code must credit its origin in the header comment and be license-compatible (MIT, BSD, Apache).
 
 ```mermaid

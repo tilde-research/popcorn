@@ -9,50 +9,30 @@
 <p align="center">
   <img src="https://img.shields.io/badge/kernels-96-blue" alt="kernels"/>
   <img src="https://img.shields.io/badge/backends-6-blue" alt="backends"/>
-  <img src="https://img.shields.io/badge/implementations-128-blue" alt="implementations"/>
+  <img src="https://img.shields.io/badge/implementations-224-blue" alt="implementations"/>
   <img src="https://img.shields.io/badge/grid%20rows-31%2C176-blue" alt="grid rows"/>
 </p>
 <!-- /popcorn:badges -->
 
-***Popcorn*** 🍿 is a development and dispatch library for high-performance machine learning kernels. It unifies **96 kernels** and more than **100 optimized implementations** behind a single API, then selects among eligible backends using hardware-specific benchmark records. Each implementation is checked against a PyTorch reference; failed and unmeasured cases remain visible evidence rather than being presented as successful validation.
-Popcorn also ships a growing collection of first-party kernels, along with the environment and harness to build, test, benchmark, and deploy new kernels and backends. Contributions are welcome.
+--------------------------------------------------------------------------------
 
----
-* [Terminology](#terminology)
+<h3 align="center">
+  <a href="https://tilde-research.github.io/popcorn/docs">Documentation</a>
+  &nbsp;|&nbsp;
+  <a href="https://tilde-research.github.io/popcorn/kernels">Kernel Explorer</a>
+</h3>
+
+<!-- * [About](#about)
 * [Installation](#installation)
     * [Installing Backends](#installing-backends)
     * [Updating](#updating)
-* [Documentation](#documentation)
-* [Supported Kernels](#supported-kernels)
 * [Limitations](#limitations)
 * [Contributing](#contributing)
-* [Acknowledgement](#acknowledgement)
+* [Acknowledgement](#acknowledgement) -->
 
-## Terminology
-Due to common overloading of some frequently used terms, consult the following definitions:
-<table>
-  <tr>
-    <td><b>Kernel</b></td>
-    <td>A pure unit of work with a fixed signature and semantics defined by a <i>ground-truth</i> reference.</td>
-  </tr>
-  <tr>
-    <td><b>Input</b></td>
-    <td>A valid configuration of arguments for a kernel call.</td>
-  </tr>
-  <tr>
-    <td><b>Case</b></td>
-    <td>The set of all inputs with matching tensor metadata (shape, type) and other arguments. i.e. the data inside tensors is abstracted away.</td>
-  </tr>
-  <tr>
-    <td><b>Implementation</b></td>
-    <td>A function that matches the output of a <i>kernel's reference</i> for a subset of valid cases.</td>
-  </tr>
-  <tr>
-    <td><b>Backend</b></td>
-    <td>A library or collection of <i>kernel implementations</i>.</td>
-  </tr>
-</table>
-
+## About
+***Popcorn*** 🍿 is a development and dispatch library for high-performance machine learning kernels. It unifies **96 kernels** and more than **100 optimized implementations** behind a single API, then selects among eligible backends using hardware-specific benchmark records. Each implementation is checked against a PyTorch reference; failed and unmeasured cases remain visible evidence rather than being presented as successful validation.
+Popcorn also ships a growing collection of first-party kernels, along with the environment and harness to build, test, benchmark, and deploy new kernels and backends. Contributions are welcome.
 
 ## Installation
 
@@ -90,18 +70,6 @@ Re-resolving the git dependency rebuilds the package, which refreshes the cache 
 ```bash
 uv lock --upgrade-package popcorn && uv sync
 ```
-
-## Documentation
-
-- [Documentation](https://tilde-research.github.io/popcorn/docs)
-- [Kernel explorer](https://tilde-research.github.io/popcorn/kernels)
-
-## Supported Kernels
-
-The current registry covers 96 kernels and 128 implementations. Browse the
-[kernel explorer](https://tilde-research.github.io/popcorn/kernels) for signatures,
-available backends, validation records, and measured performance.
-
 ## Limitations
 
 ### Correctness
