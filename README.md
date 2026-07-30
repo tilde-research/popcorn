@@ -4,6 +4,8 @@
 
 <!-- popcorn:badges -->
 <p align="center">
+  <a href="https://pypi.org/project/popcorn/"><img src="https://img.shields.io/pypi/v/popcorn" alt="PyPI"/></a>
+  <a href="https://github.com/tilde-research/popcorn/releases/latest"><img src="https://img.shields.io/github/v/release/tilde-research/popcorn" alt="release"/></a>
   <img src="https://img.shields.io/badge/kernels-96-blue" alt="kernels"/>
   <img src="https://img.shields.io/badge/backends-6-blue" alt="backends"/>
   <img src="https://img.shields.io/badge/implementations-224-blue" alt="implementations"/>

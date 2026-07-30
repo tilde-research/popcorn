@@ -78,7 +78,7 @@ def matrix(records: Iterable[Record]) -> str:
 
 
 def badges(records: Iterable[Record], ops: Mapping[str, Any]) -> str:
-    """Shields.io badge row: registered counts plus the recorded grid size."""
+    """Shields.io badge row: releases, registered counts, and recorded grid size."""
     names = [impl.name for op in ops.values() for impl in op._impls]
     counts = (
         ("kernels", str(len(ops))),
@@ -86,11 +86,16 @@ def badges(records: Iterable[Record], ops: Mapping[str, Any]) -> str:
         ("implementations", str(len(names))),
         ("grid rows", f"{sum(1 for _ in records):,}".replace(",", "%2C")),
     )
-    images = "\n".join(
-        f'  <img src="https://img.shields.io/badge/{label.replace(" ", "%20")}-{value}-blue" alt="{label}"/>'
-        for label, value in counts
-    )
-    return f'<p align="center">\n{images}\n</p>'
+    images = [
+        '  <a href="https://pypi.org/project/popcorn/"><img src="https://img.shields.io/pypi/v/popcorn" alt="PyPI"/></a>',
+        '  <a href="https://github.com/tilde-research/popcorn/releases/latest"><img src="https://img.shields.io/github/v/release/tilde-research/popcorn" alt="release"/></a>',
+        *(
+            f'  <img src="https://img.shields.io/badge/{label.replace(" ", "%20")}-{value}-blue" alt="{label}"/>'
+            for label, value in counts
+        ),
+    ]
+    body = "\n".join(images)
+    return f'<p align="center">\n{body}\n</p>'
 
 
 def _replaced(text: str, markers: tuple[str, str], body: str) -> str:
