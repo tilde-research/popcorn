@@ -17,14 +17,10 @@ uv pip install --torch-backend=auto "popcorn[fla]"    # + FLA backends
 matching PyTorch wheel index.
 
 > [!WARNING]
-> Plain `pip` installation is not generally supported because `pip` does not select a
-> hardware-compatible PyTorch index. If you need it, first install the appropriate PyTorch build
-> using the [PyTorch installation selector](https://pytorch.org/get-started/locally/), then run
-> `python -m pip install popcorn`. No additional Popcorn setup is required: the published wheel
-> includes its pinned benchmark reports. The `fa3` extra is the exception—it requires the source
-> and build configuration documented in
-> [CONTRIBUTING.md](https://github.com/tilde-research/popcorn/blob/main/CONTRIBUTING.md) and cannot
-> be installed from PyPI alone.
+> `pip install popcorn` is not generally supported. Install the correct PyTorch build for your
+> hardware first, then install Popcorn with pip. We recommend `uv` because
+> `--torch-backend=auto` selects PyTorch for you. The `fa3` extra must be installed from source;
+> see [CONTRIBUTING.md](https://github.com/tilde-research/popcorn/blob/main/CONTRIBUTING.md).
 
 Add one extra per backend you want. There is no "everything" extra: the backends pin mutually
 exclusive requirements, so installing them together does not resolve.
@@ -39,7 +35,7 @@ uv run python -m popcorn.bench pull
 ```
 
 The shipped cache covers the hardware it was recorded on. To measure what your own machine has no
-timing for and add it to your local cache, use `python -m popcorn.bench fill` — already-cached
+timing for and add it to your local cache, use `python -m popcorn.bench fill`. Already-cached
 combinations are skipped, and `--force` re-measures them.
 
 A backend is eligible only when its package is installed at a declared supported version:
@@ -78,7 +74,7 @@ output = rms_norm(x, weight, backend="liger")
 
 ## Next steps
 
-- [Dispatching](./dispatching.md) — how a call resolves to one implementation
-- [Validation](./validation.md) — compare implementations against the reference
-- [Benchmarking](./benchmarking.md) — record timings and route on data
-- [Kernel explorer](https://tilde-research.github.io/popcorn/kernels) — every kernel: math, backends, measured performance
+- [Dispatching](./dispatching.md): how a call resolves to one implementation
+- [Validation](./validation.md): compare implementations against the reference
+- [Benchmarking](./benchmarking.md): record timings and route on data
+- [Kernel explorer](https://tilde-research.github.io/popcorn/kernels): every kernel, its math, backends, and measured performance

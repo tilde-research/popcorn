@@ -44,13 +44,10 @@ uv pip install --torch-backend=auto "popcorn[fla]"    # + FLA backends
 matching PyTorch wheel index.
 
 > [!WARNING]
-> Plain `pip` installation is not generally supported because `pip` does not select a
-> hardware-compatible PyTorch index. If you need it, first install the appropriate PyTorch build
-> using the [PyTorch installation selector](https://pytorch.org/get-started/locally/), then run
-> `python -m pip install popcorn`. No additional Popcorn setup is required: the published wheel
-> includes its pinned benchmark reports. The `fa3` extra is the exception—it requires the source
-> and build configuration documented in [CONTRIBUTING.md](CONTRIBUTING.md) and cannot be installed
-> from PyPI alone.
+> `pip install popcorn` is not generally supported. Install the correct PyTorch build for your
+> hardware first, then install Popcorn with pip. We recommend `uv` because
+> `--torch-backend=auto` selects PyTorch for you. The `fa3` extra must be installed from source;
+> see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Add one extra per backend you want. There is no "everything" extra: the backends pin mutually exclusive requirements, so installing them together does not resolve.
 
