@@ -3,7 +3,7 @@ export function InstallSnippet() {
     <pre className="overflow-x-auto border border-fd-border bg-fd-card px-4 py-3 font-mono text-[13px] leading-relaxed text-fd-foreground">
       <code>
         <span className="select-none text-fd-muted-foreground">$ </span>
-        {'uv add "popcorn @ git+https://github.com/tilde-research/popcorn"'}
+        {'uv pip install --torch-backend=auto popcorn'}
       </code>
     </pre>
   );

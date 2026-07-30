@@ -1,6 +1,3 @@
-> [!WARNING]
-> This repository has been made public for review, but it is not yet ready for use. The API, behavior, and documentation may change. Please wait for the official release before using it.
-
 <p align="center">
   <img src="https://raw.githubusercontent.com/tilde-research/popcorn/main/images/popcorn-banner.png" alt="Popcorn"/>
 </p>
@@ -36,12 +33,24 @@ Popcorn also ships a growing collection of first-party kernels, along with the e
 
 ## Installation
 
-Popcorn is not on PyPI yet. Install it from GitHub using `uv` with:
+Install Popcorn from PyPI using `uv`:
 ```bash
-uv add "popcorn @ git+https://github.com/tilde-research/popcorn"           # first-party only
-uv add "popcorn[liger] @ git+https://github.com/tilde-research/popcorn"    # + Liger-Kernel backends
-uv add "popcorn[fla] @ git+https://github.com/tilde-research/popcorn"      # + FLA backends
+uv pip install --torch-backend=auto popcorn           # first-party only
+uv pip install --torch-backend=auto "popcorn[liger]"  # + Liger-Kernel backends
+uv pip install --torch-backend=auto "popcorn[fla]"    # + FLA backends
 ```
+
+`--torch-backend=auto` detects the available CPU, CUDA, ROCm, or XPU environment and selects the
+matching PyTorch wheel index.
+
+> [!WARNING]
+> Plain `pip` installation is not generally supported because `pip` does not select a
+> hardware-compatible PyTorch index. If you need it, first install the appropriate PyTorch build
+> using the [PyTorch installation selector](https://pytorch.org/get-started/locally/), then run
+> `python -m pip install popcorn`. No additional Popcorn setup is required: the published wheel
+> includes its pinned benchmark reports. The `fa3` extra is the exception—it requires the source
+> and build configuration documented in [CONTRIBUTING.md](CONTRIBUTING.md) and cannot be installed
+> from PyPI alone.
 
 Add one extra per backend you want. There is no "everything" extra: the backends pin mutually exclusive requirements, so installing them together does not resolve.
 
@@ -62,13 +71,13 @@ Already-cached combinations are skipped; pass `--force` to re-measure them. Disp
 ### Installing Backends
 To install the prerequisites for an additional backend:
 ```bash
-uv add "popcorn[<new_extra>] @ git+https://github.com/tilde-research/popcorn"
+uv pip install --torch-backend=auto "popcorn[<new_extra>]"
 ```
 
 ### Updating
-Re-resolving the git dependency rebuilds the package, which refreshes the cache with it:
+Upgrade Popcorn and refresh its pinned report cache with:
 ```bash
-uv lock --upgrade-package popcorn && uv sync
+uv pip install --upgrade --torch-backend=auto popcorn
 ```
 ## Limitations
 

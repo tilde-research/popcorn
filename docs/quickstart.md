@@ -5,13 +5,26 @@ description: Install Popcorn and dispatch your first kernel
 
 ## Install
 
-Popcorn is not on PyPI yet. Install it from GitHub using `uv` with:
+Install Popcorn from PyPI using `uv`:
 
 ```bash
-uv add "popcorn @ git+https://github.com/tilde-research/popcorn"           # first-party only
-uv add "popcorn[liger] @ git+https://github.com/tilde-research/popcorn"    # + Liger-Kernel backends
-uv add "popcorn[fla] @ git+https://github.com/tilde-research/popcorn"      # + FLA backends
+uv pip install --torch-backend=auto popcorn           # first-party only
+uv pip install --torch-backend=auto "popcorn[liger]"  # + Liger-Kernel backends
+uv pip install --torch-backend=auto "popcorn[fla]"    # + FLA backends
 ```
+
+`--torch-backend=auto` detects the available CPU, CUDA, ROCm, or XPU environment and selects the
+matching PyTorch wheel index.
+
+> [!WARNING]
+> Plain `pip` installation is not generally supported because `pip` does not select a
+> hardware-compatible PyTorch index. If you need it, first install the appropriate PyTorch build
+> using the [PyTorch installation selector](https://pytorch.org/get-started/locally/), then run
+> `python -m pip install popcorn`. No additional Popcorn setup is required: the published wheel
+> includes its pinned benchmark reports. The `fa3` extra is the exception—it requires the source
+> and build configuration documented in
+> [CONTRIBUTING.md](https://github.com/tilde-research/popcorn/blob/main/CONTRIBUTING.md) and cannot
+> be installed from PyPI alone.
 
 Add one extra per backend you want. There is no "everything" extra: the backends pin mutually
 exclusive requirements, so installing them together does not resolve.
@@ -33,10 +46,10 @@ A backend is eligible only when its package is installed at a declared supported
 auto-dispatch skips unavailable ones, and forcing one raises with the install hint or
 version error. First-party kernels (the `popcorn` backend) are always included.
 
-Re-resolving the git dependency rebuilds the package, refreshing the cache with it:
+Upgrade Popcorn and refresh its pinned report cache with:
 
 ```bash
-uv lock --upgrade-package popcorn && uv sync
+uv pip install --upgrade --torch-backend=auto popcorn
 ```
 
 ## Call a kernel

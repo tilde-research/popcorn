@@ -1,8 +1,8 @@
 # Publishes to PyPI via trusted publishing on a GitHub release.
 # Prerequisites (one-time): PyPI project 'popcorn' transferred, then add a
-# trusted publisher on PyPI: repo tilde-research/popcorn, workflow publish.yml,
+# trusted publisher on PyPI: repo tilde-research/popcorn, workflow pypi.yml,
 # environment pypi. No API tokens are stored.
-name: Publish
+name: PyPI
 
 on:
   release:

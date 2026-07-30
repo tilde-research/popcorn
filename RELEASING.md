@@ -32,10 +32,13 @@ The filter promotes `src/popcorn/` to the repository root, which is already a st
 
 ## 3. Publish
 
-PyPI uses trusted publishing (no tokens): on PyPI, add a trusted publisher for `tilde-research/popcorn`, workflow `publish.yml`, environment `pypi`, and create the matching `pypi` environment in the GitHub repo settings.
+PyPI uses trusted publishing (no tokens): on PyPI, add a trusted publisher for
+`tilde-research/popcorn`, workflow `pypi.yml`, environment `pypi`, and create the matching `pypi`
+environment in the GitHub repo settings.
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-Create a GitHub release from the tag; the publish workflow builds and uploads to PyPI. Yank-and-fix goes through a patch release, never a force-push.
+Create a GitHub release titled exactly like the tag (`v0.1.0`); the PyPI workflow builds and
+uploads the `popcorn` distribution. Yank-and-fix goes through a patch release, never a force-push.
