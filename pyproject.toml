@@ -21,6 +21,12 @@ classifiers = [
 ]
 dependencies = [
     "torch>=2.5",
+    # The first-party implementations are Triton kernels gated on an exact version by
+    # declare_backend("popcorn", ...), and torch pins Triton exactly in turn, so an
+    # unbounded torch lets a fresh environment resolve past that gate and silently
+    # register nothing: a sweep then reports the whole popcorn backend as unavailable
+    # rather than failing. Pinning Triton here bounds torch to the versions that ship it.
+    "triton>=3.6.0,<=3.6.0 ; platform_system == 'Linux'",
     "jaxtyping>=0.2.36",
     "packaging>=23.0",
     "einops>=0.8",
