@@ -17,6 +17,37 @@ def _wall_deps(**_):
     return all(importlib.util.find_spec(module) for module in ("fla", "einops", "triton"))
 
 
+def _decayed_logits(q32: Tensor, k32: Tensor, prefix: Tensor) -> Tensor:
+    r"""Causal $\sum_d q_{id} k_{jd} 2^{P_{id} - P_{jd}}$, keeping every `exp2` argument at most 0.
+
+    The decay is per channel, so it only factors into a matmul as $2^{P_i}$ on `q` and
+    $2^{-P_j}$ on `k`, and the second overflows fp32 once the prefix spans more than 128
+    in log2 (roughly 100 tokens of log-sigmoid gating). Framing each query block on its
+    own first prefix holds both factors in $[0, 1]$ for keys before the block, which is
+    the frame the Triton kernel uses; anything that underflows there is a pair whose true
+    weight is already negligible. A block's own diagonal admits no such frame, so there
+    the decay stays inside the contraction, where causality bounds it by 1. That diagonal
+    costs `block**2 * head_dim` against the `seq**2` the score matrix already spends, so
+    the block scales with the sequence to hold it near a sixteenth of that and keep the
+    loop short.
+    """
+    batch, seq, heads, head_dim = q32.shape
+    block = max(16, int(seq / (4 * head_dim**0.5)))
+    scores = q32.new_zeros(batch, heads, seq, seq)
+    for start in range(0, seq, block):
+        stop = min(start + block, seq)
+        pq, ref = prefix[:, start:stop], prefix[:, start : start + 1]
+        scores[:, :, start:stop, :start] = torch.einsum(
+            "bihc,bjhc->bhij",
+            q32[:, start:stop] * torch.exp2(pq - ref),
+            k32[:, :start] * torch.exp2(ref - prefix[:, :start]),
+        )
+        decay = torch.exp2(torch.clamp(pq[:, :, None] - pq[:, None, :], max=0.0))
+        product = q32[:, start:stop, None] * k32[:, None, start:stop] * decay
+        scores[:, :, start:stop, start:stop] = product.sum(-1).permute(0, 3, 1, 2)
+    return scores
+
+
 # `g`/`g_scalar` are log-decay gates: the kernel's per-block reference frame
 # assumes the prefix `P = cumsum(g)` is monotone non-increasing (as FoX/forgetting
 # attention), so the gates are seeded in the log-sigmoid (<= 0) domain. A mixed-sign
@@ -49,9 +80,7 @@ def wall_attn(
     q32, k32, v32, g32 = map(upcast, (q, k, v, g))
     groups = q.shape[2] // k.shape[2]
     prefix = g32.cumsum(1) * RCP_LN2
-    q_til = q32 * torch.exp2(prefix)
-    k_til = k32.repeat_interleave(groups, 2) * torch.exp2(-prefix)
-    scores = torch.einsum("bihc,bjhc->bhij", q_til, k_til) * scale
+    scores = _decayed_logits(q32, k32.repeat_interleave(groups, 2), prefix) * scale
 
     seq = q.shape[1]
     idx = torch.arange(seq, device=q.device)
