@@ -61,7 +61,10 @@ _WIDTH = Range(8, 512) | {
 }
 
 # Attention heads: MQA (kv=1), GQA groups (2/4/8), and MHA (kv == q).
-# Llama 3.1: 32/8, 64/8, 128/8; Qwen3: 16/8 … 64/8; Mixtral: 32/8.
+# Llama 3.1: 32/8, 64/8, 128/8; Qwen3: 16/8 … 64/8; Mixtral: 32/8. Every one of those
+# divides, which the pools cannot say on their own, so an op declaring both counts gets
+# its `kv_heads` snapped onto a divisor of `q_heads` when the grid pairs them (see
+# `bench.grid._regroup`); that is also why a case can carry a `kv_heads` not listed here.
 _Q_HEADS = {1, 2, 4, 6, 8, 12, 16, 18, 20, 24, 28, 32, 36, 40, 48, 64, 72, 80, 96, 128}
 _KV_HEADS = {1, 2, 4, 8, 16, 32, 40, 64, 128}
 

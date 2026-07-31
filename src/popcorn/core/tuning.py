@@ -85,7 +85,8 @@ class Tuner:
             result, environment, config = record.result, record.environment, record.config
             bench = result.bench
             usable = (
-                result.status == "pass"
+                record.impl != "torch"
+                and result.status == "pass"
                 and result.benchmarked
                 and environment.torch == torch.__version__
                 and environment.backend_version == installed_version(record.impl)
@@ -120,7 +121,8 @@ class Tuner:
         current = [
             record
             for record in self.rows
-            if record.environment.torch == torch.__version__
+            if record.impl != "torch"
+            and record.environment.torch == torch.__version__
             and record.environment.backend_version == installed_version(record.impl)
             and matching(self.op.fingerprint, record.environment.ref_hash)
             and matching(self._expected(record.impl), record.environment.impl_hash)

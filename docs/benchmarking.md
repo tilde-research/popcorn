@@ -51,11 +51,65 @@ POPCORN_BENCH=1 python train.py
 Both APIs write to the user cache and never modify the package's bundled reports. First use
 is synchronous and may compile every eligible implementation.
 
+## Fill dimension coverage
+
+To expand the cache systematically on the current device:
+
+```bash
+python -m popcorn.bench fill
+```
+
+`fill` builds a pairwise covering array over every dimension pool in `core/dims.py`, dtypes,
+scalar test arguments, and optional inputs. This covers every value and every two-axis interaction
+without attempting the full Cartesian product. It runs smaller shapes first and keeps an OOM
+frontier for each implementation and case stratum. A later shape is skipped only when it is at
+least as large in every dimension as an observed OOM. A mixed tradeoff, such as lowering `hidden`
+while raising `seq`, still runs.
+
+Only observed results are stored. Shapes skipped by the OOM frontier do not become inferred report
+rows. Use `--limit N` when you specifically want the older deterministic random sample, or
+`--force` to ignore cached exact cases and rebuild the frontier from this run.
+
+## Full ten-node sweep
+
+Maintainers can run the complete H100 database sweep with:
+
+```bash
+uv run python scripts/bench_sweep.py submit --watch
+```
+
+This submits one exclusive allocation with exactly 10 nodes and 80 workers. A submission guard
+refuses to start while another `popcorn-sweep` job is queued or running. Inside that allocation,
+the coordinator benchmarks torch references first, then runs `popcorn`, `fa3`, `fla`, `liger`,
+`quack`, and `unsloth` in order. It deletes and reinstalls the environment once before every
+phase. Backends are never installed together and the environment is not rebuilt per case.
+Later phases reuse reference timing only for an exact device, Torch version, reference fingerprint,
+case, and gradient-mode match. Every backend still executes the reference during correctness
+grading; cached timing never substitutes for validation.
+
+Work is balanced by OOM-comparable strata. Small op/implementation bundles stay together to reuse
+their compile cache; only bundles large enough to cause a tail are split across workers. The live
+view reports installation and planning, cached and newly measured rows, status counts, OOM-pruned
+cases, each backend phase, and overall completion. Stopping the watcher does not cancel Slurm:
+
+```bash
+uv run python scripts/bench_sweep.py watch
+uv run python scripts/bench_sweep.py resume logs/sweeps/<run> --watch
+```
+
+Each phase saves partial results before the next environment is installed, so `resume` skips
+completed phases and cached cases. Nothing is published automatically. Review the run cache first,
+then fold its JSONL files into the bundled Parquet store:
+
+```bash
+POPCORN_CACHE_DIR=logs/sweeps/<run>/cache uv run python -m popcorn.bench view --user
+uv run python -m popcorn.bench merge logs/sweeps/<run>/cache/v*/reports/*.jsonl
+```
+
 ## Watching it happen
 
-Every recorded result is also logged on the `popcorn.bench` logger — one line per op,
-backend, and case with status, forward/backward milliseconds, and the failure reason if any
-— followed by where the rows were written:
+API-triggered benchmarks log on `popcorn.bench`: one line per op, backend, and case,
+followed by where the rows were written.
 
 ```python
 import logging

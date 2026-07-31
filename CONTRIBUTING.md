@@ -64,8 +64,11 @@ editable — fetches the revision pinned in `src/popcorn/reports/REVISION`, whic
 reproducible. `POPCORN_SKIP_REPORTS=1` builds without them, and `python -m popcorn.bench pull` refetches on
 demand; with no rows, every call resolves to the torch reference and popcorn says so.
 
-`python -m popcorn.bench fill` measures whatever combinations your machine has no timed row for and writes
-them to your user cache, which dispatch reads alongside the shipped ones.
+`python -m popcorn.bench fill` pairwise-covers every declared dimension, dtype, scalar argument, and optional
+input, then writes missing timings to the user cache that dispatch reads alongside the shipped rows. Cases run
+from smaller to larger shapes. Once a case OOMs, only cases that are at least as large in every dimension in
+the same dtype/argument/presence stratum are pruned. Lowering one dimension while raising another remains
+runnable. `--limit N` selects the older deterministic random sample instead.
 
 With the [Ruff extension](https://marketplace.visualstudio.com/items?itemName=charliermarsh.ruff), the checked-in `.vscode/settings.json` formats and lint-fixes on save; `scripts/format.sh` does the same from the terminal. There are no commit hooks — CI enforces formatting on the PR.
 
@@ -271,6 +274,19 @@ result = compare(mine, reference, {"x": x, "weight": weight})
 `compare` consumes concrete named inputs, checks forward and backward against fp64 truth, then times both callables. It owns no registry or persistence.
 
 `run` executes the op's full grid (shapes x args x dtypes x batch ranks x optional-tensor presence), forward and backward. Correctness is completed before timing; a timing failure is recorded separately and never overwrites a correctness pass. `--reps` controls seeded comparisons and timed repetitions; `--limit` takes one deterministic per-op sample shared by every backend; `--shard I/K` selects one contiguous slice. Rows atomically upsert into `src/popcorn/reports/<op>.parquet` by exact case, gradient requirement, hardware, Torch version, and backend version. `run` and `merge` regenerate the README badges automatically.
+
+`fill` is the bounded database-expansion path. Its pairwise covering array includes every value from
+`core/dims.py` and every two-axis interaction without materializing the hundreds of millions of cases in the
+full product. OOM pruning schedules no inferred rows: the observed OOM remains evidence, while dominated cases
+are simply left unmeasured. Run each backend in its isolated environment so package collisions cannot affect
+the records.
+
+For the complete H100 database sweep, use `uv run python scripts/bench_sweep.py submit --watch`. It owns one
+exclusive 10-node allocation, records references first, then wipes and reinstalls one isolated environment for
+each backend in a fixed sequence. Its planner balances OOM strata across 80 workers while keeping compile
+affinity where possible. Partial rows and progress survive interruption; resume with
+`uv run python scripts/bench_sweep.py resume logs/sweeps/<run> --watch`. Exact reference timings are reused
+across phases, but reference correctness still runs for every implementation. The sweep never publishes.
 
 Before any case runs, `run` and `map` pin the target: a bare `--device cuda` resolves to the current index (`cuda:0`), a CUDA request with no visible GPU is an error rather than a silent CPU run, and the resolved device name is printed. Hardware is stamped from that live device, so pass `--hardware H100` to abort when the machine you landed on is not the one you meant to record. `submit` forwards the gate to every array task.
 

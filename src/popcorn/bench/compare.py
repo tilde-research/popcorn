@@ -139,11 +139,13 @@ def _benchmark(
     backward: bool,
     repeats: int,
     warmup: int,
+    reference_bench: Mapping[str, float] | None = None,
 ) -> dict[str, float]:
     tensor = next((value for value in inputs.values() if isinstance(value, torch.Tensor)), None)
     device = tensor.device if tensor is not None and tensor.device.type == "cuda" else None
     bench: dict[str, float] = {}
-    for prefix, forward in (("", mine), ("ref_", reference)):
+    forwards = (("", mine),) if reference_bench is not None else (("", mine), ("ref_", reference))
+    for prefix, forward in forwards:
         side = _clone(inputs, grad=backward)
         measured = _measure(lambda: forward(**side), device, repeats, warmup)
         bench[f"{prefix}fwd_ms"] = measured["ms"]
@@ -164,6 +166,11 @@ def _benchmark(
             bench[f"{prefix}bwd_q20_ms"], bench[f"{prefix}bwd_q80_ms"] = measured["q20_ms"], measured["q80_ms"]
         if "mem_mb" in measured:
             bench[f"{prefix}bwd_mem_mb"] = measured["mem_mb"]
+    if reference_bench is not None:
+        cached = reference_bench or {
+            f"ref_{name}": value for name, value in bench.items() if name.startswith(("fwd_", "bwd_"))
+        }
+        bench.update({name: value for name, value in cached.items() if name.startswith("ref_")})
     return bench
 
 
@@ -181,6 +188,7 @@ def compare_inputs(
     benchmark: bool = True,
     repeats: int = 10,
     warmup: int = 2,
+    reference_bench: Mapping[str, float] | None = None,
 ) -> Result:
     if repeats < 1:
         raise ValueError("repeats must be at least 1")
@@ -284,7 +292,7 @@ def compare_inputs(
     result.reps = index + 1
     if benchmark:
         try:
-            result.bench = _benchmark(mine, reference, first, backward, repeats, warmup)
+            result.bench = _benchmark(mine, reference, first, backward, repeats, warmup, reference_bench)
             result.benchmarked = True
         except Exception as error:
             result.bench_error = f"{type(error).__name__}: {error}"

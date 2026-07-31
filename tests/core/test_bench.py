@@ -16,26 +16,29 @@ import popcorn
 from popcorn import KERNELS
 from popcorn.bench import Case, Gauge, compare, hub, store
 from popcorn.bench.__main__ import (
-    _cached,
     _fill_pending,
     _impl,
     _isolated,
+    _record_index,
     _require_clean,
     _target_device,
+    _usable_records,
     _work,
+    cmd_fill,
     cmd_merge,
     cmd_publish,
     cmd_run,
     cmd_submit,
 )
-from popcorn.bench.grid import cases, make_inputs
+from popcorn.bench.grid import ELLIPSIS, _dim_pool, cases, covering_cases, make_inputs
 from popcorn.bench.model import Environment, Record, Result
 from popcorn.bench.readme import badges, matrix
 from popcorn.bench.store import PUBLISHED, Store, bundled_path, read, read_file, unmeasured, write
 from popcorn.bench.viewer import render
 from popcorn.core import Dispatcher
-from popcorn.core.config import call_config, config_id, make_config
+from popcorn.core.config import call_config, config_id, device_name, make_config
 from popcorn.core.sources import installed_version
+from popcorn.core.tuning import Tuner
 from popcorn.kernels._utils import default_scale, rms, upcast
 
 comparison = importlib.import_module("popcorn.bench.compare")
@@ -73,6 +76,88 @@ def test_compare_is_callable_first():
     )
     assert result.status == "pass"
     assert result.reps == 2
+
+
+def test_cached_reference_timing_skips_only_the_benchmark_leg(monkeypatch):
+    reference_calls = 0
+    measured = []
+
+    def reference(x):
+        nonlocal reference_calls
+        reference_calls += 1
+        return x + 1
+
+    def measure(fn, device, repeats, warmup):
+        measured.append(fn)
+        fn()
+        return {"ms": 2.0, "mem_mb": 3.0}
+
+    monkeypatch.setattr(comparison, "_measure", measure)
+    result = comparison.compare_inputs(
+        lambda x: x + 1,
+        reference,
+        [{"x": torch.ones(4)}],
+        backward=False,
+        repeats=1,
+        warmup=0,
+        reference_bench={"ref_fwd_ms": 7.0, "ref_fwd_mem_mb": 11.0},
+    )
+
+    assert result.status == "pass"
+    assert reference_calls == 2  # float64 truth and native-dtype budget still run
+    assert len(measured) == 1  # only implementation timing is repeated
+    assert result.bench["fwd_ms"] == 2.0
+    assert result.bench["ref_fwd_ms"] == 7.0
+    assert result.bench["ref_fwd_mem_mb"] == 11.0
+
+
+def test_reference_subject_is_timed_once(monkeypatch):
+    measured = []
+
+    def measure(fn, device, repeats, warmup):
+        measured.append(fn)
+        fn()
+        return {"ms": 2.0}
+
+    monkeypatch.setattr(comparison, "_measure", measure)
+    result = comparison.compare_inputs(
+        lambda x: x,
+        lambda x: x,
+        [{"x": torch.ones(1)}],
+        backward=False,
+        repeats=1,
+        reference_bench={},
+    )
+    assert len(measured) == 1
+    assert result.bench["fwd_ms"] == result.bench["ref_fwd_ms"] == 2.0
+
+
+def test_store_returns_only_fresh_exact_torch_timing(tmp_path):
+    config = {"dims": {"D": 4}, "batch": [], "dtype": "float32", "args": {}, "present": []}
+    result = Result(
+        status="pass",
+        grad=False,
+        benchmarked=True,
+        bench={"fwd_ms": 1.25, "fwd_q20_ms": 1.0},
+    )
+    row = Record(
+        "op",
+        "torch",
+        "D=4",
+        "case",
+        config,
+        Environment("cpu", torch.__version__, None, "2026-01-01T00:00:00+00:00", "reference-hash", "reference-hash"),
+        result,
+    )
+    cache = Store(bundled=tmp_path / "reports", user=tmp_path / "reports")
+    cache.write_user([row])
+
+    assert cache.reference_bench("op", "case", config, "cpu", torch.__version__, False, "reference-hash") == {
+        "ref_fwd_ms": 1.25,
+        "ref_fwd_q20_ms": 1.0,
+    }
+    assert cache.reference_bench("op", "case", config, "cpu", torch.__version__, False, "stale-hash") is None
+    assert cache.reference_bench("op", "case", config, "other-device", torch.__version__, False, "reference-hash") is None
 
 
 def test_compare_grades_forward_and_backward():
@@ -168,6 +253,24 @@ def test_grid_is_deterministic_and_uses_canonical_config(monkeypatch):
     assert config_id(call.config) == case.case_id
 
 
+def test_covering_grid_uses_every_canonical_dim_value():
+    for op in KERNELS.values():
+        grid = covering_cases(op)
+        # An op declaring both head counts has `kv_heads` snapped onto a divisor of
+        # `q_heads`, which adds real group counts the pool never lists; pairwise coverage
+        # still pairs each declared value with itself, so none of them is lost.
+        grouped = {"q_heads", "kv_heads"} <= op._dims
+        for name in op._dims:
+            seen, pool = {dict(case.dims)[name] for case in grid}, set(_dim_pool(op, name))
+            if grouped and name == "kv_heads":
+                assert pool <= seen and all(value <= max(pool) for value in seen), f"{op.name}:{name}"
+            else:
+                assert seen == pool, f"{op.name}:{name}"
+        if any(... in spec.tokens for spec in op.specs):
+            leading = {case.batch[0] if case.batch else 0 for case in grid}
+            assert leading == set(_dim_pool(op, ELLIPSIS)), f"{op.name}:{ELLIPSIS}"
+
+
 def test_config_values_are_json_stable():
     config = make_config({"D": 4}, (), torch.float32, {"sections": (1, {3, 2})}, ())
     assert config["args"] == {"sections": [1, [2, 3]]}
@@ -199,6 +302,81 @@ def test_forward_only_backends_get_forward_grid_coverage():
     record = op.bench.run_case("fwd", cases(op)[0], device="cpu", trials=1, benchmark=False)
     assert record.result.status == "pass"
     assert record.result.grad is False
+
+
+def test_input_allocation_oom_is_recorded_as_oom(monkeypatch):
+    op = _op()
+
+    def out_of_memory(*args, **kwargs):
+        raise torch.OutOfMemoryError("test capacity")
+
+    monkeypatch.setattr("popcorn.bench.service.make_inputs", out_of_memory)
+    record = op.bench.run_case("alt", cases(op, 1)[0], device="cpu", trials=1, benchmark=False)
+    assert record.result.status == "oom"
+    assert record.result.reason == "inputs: test capacity"
+
+
+def test_run_case_reuses_torch_timing_from_the_shared_store(monkeypatch, tmp_path):
+    op = _op()
+    case = cases(op, 1)[0]
+    reference = Record(
+        op.name,
+        "torch",
+        str(case),
+        case.case_id,
+        case.config(),
+        Environment(
+            device_name("cpu"),
+            torch.__version__,
+            None,
+            "2026-01-01T00:00:00+00:00",
+            op.fingerprint,
+            op["torch"].fingerprint,
+        ),
+        Result(status="pass", grad=True, benchmarked=True, bench={"fwd_ms": 4.0}),
+    )
+    cache = Store(bundled=tmp_path / "reports", user=tmp_path / "reports")
+    cache.write_user([reference])
+    op.bench.store = cache
+    seen = {}
+
+    def compare_inputs(*args, **kwargs):
+        seen.update(kwargs)
+        return Result(status="pass", grad=True)
+
+    monkeypatch.setattr("popcorn.bench.service.compare_inputs", compare_inputs)
+    op.bench.run_case("alt", case, device="cpu", trials=1)
+    assert seen["reference_bench"] == {"ref_fwd_ms": 4.0}
+
+
+def test_torch_reference_rows_do_not_become_tuner_samples(tmp_path):
+    op = _op()
+    case = cases(op, 1)[0]
+    result = Result(status="pass", grad=True, benchmarked=True, bench={"fwd_ms": 1.0, "ref_fwd_ms": 2.0})
+    records = [
+        Record(
+            op.name,
+            impl,
+            str(case),
+            case.case_id,
+            case.config(),
+            Environment(
+                device_name("cpu"),
+                torch.__version__,
+                None,
+                "2026-01-01T00:00:00+00:00",
+                op.fingerprint,
+                op[impl].fingerprint,
+            ),
+            result,
+        )
+        for impl in ("torch", "alt")
+    ]
+    reports = tmp_path / "reports"
+    cache = Store(bundled=reports, user=reports)
+    cache.write_user(records)
+
+    assert [sample.impl for sample in Tuner(op, cache).samples] == ["alt"]
 
 
 def test_non_floating_outputs_are_value_checked():
@@ -357,6 +535,62 @@ def test_fill_retains_stable_skip_and_oom_evidence():
     assert _fill_pending(_record("error"))
 
 
+def test_fill_prunes_dominated_oom_shapes_but_runs_mixed_tradeoffs(monkeypatch, tmp_path):
+    op = _op()
+
+    def case(x, y, z):
+        return Case((("X", x), ("Y", y), ("Z", z)), (), torch.float32, (), frozenset())
+
+    oom = case(4, 8, 16)
+    dominated = case(8, 8, 16)
+    mixed = case(2, 8, 32)
+    work = [(op, "alt", candidate) for candidate in (oom, dominated, mixed)]
+    calls = []
+    written = []
+
+    class FakeStore:
+        user = tmp_path
+
+        def write_user(self, records):
+            written.extend(records)
+
+    def run_case(impl, candidate, *args, **kwargs):
+        calls.append(candidate)
+        status = "oom" if candidate == oom else "pass"
+        return Record(
+            op.name,
+            impl,
+            str(candidate),
+            candidate.case_id,
+            candidate.config(),
+            Environment("cpu", torch.__version__, None, "2026-01-01T00:00:00+00:00"),
+            Result(status=status, grad=True, benchmarked=status == "pass"),
+        )
+
+    monkeypatch.setitem(cmd_fill.__globals__, "Store", FakeStore)
+    monkeypatch.setitem(cmd_fill.__globals__, "_covering_work", lambda *args: work)
+    monkeypatch.setitem(cmd_fill.__globals__, "_usable_records", lambda *args: [])
+    monkeypatch.setitem(cmd_fill.__globals__, "available", lambda impl: True)
+    monkeypatch.setattr(op.bench, "run_case", run_case)
+    cmd_fill(
+        Namespace(
+            ops=[],
+            backend=None,
+            limit=None,
+            device="cpu",
+            hardware=None,
+            force=False,
+            in_process=True,
+            timeout=30,
+            reps=1,
+            flush=10,
+        )
+    )
+
+    assert calls == [oom, mixed]
+    assert [record.result.status for record in written] == ["oom", "pass"]
+
+
 def test_fill_counts_only_rows_this_machine_could_have_produced(tmp_path):
     """Evidence from another GPU or Torch build says nothing about what to run here."""
     op = KERNELS["rms_norm"]
@@ -382,9 +616,9 @@ def test_fill_counts_only_rows_this_machine_could_have_produced(tmp_path):
 
     store = Store(bundled=tmp_path, user=tmp_path / "user")
     work = [(op, "fla", case)]
-    cached = _cached(store, work, "TestDevice")
+    cached = _record_index(_usable_records(store, work, "TestDevice"))
     assert not unmeasured(cached[(op.name, "fla", case.case_id, grad)])
-    assert _cached(store, work, "OtherDevice") == {}
+    assert _usable_records(store, work, "OtherDevice") == []
 
 
 def test_fill_re_measures_only_what_a_fingerprint_change_invalidated(tmp_path):
@@ -402,7 +636,12 @@ def test_fill_re_measures_only_what_a_fingerprint_change_invalidated(tmp_path):
         return Record(op.name, impl, str(case), case.case_id, case.config(), environment, result)
 
     write([row("fla", _impl(op, "fla").fingerprint), row("liger", "stale")], tmp_path)
-    cached = _cached(Store(bundled=tmp_path, user=tmp_path / "user"), [(op, "fla", case), (op, "liger", case)], "TestDevice")
+    usable = _usable_records(
+        Store(bundled=tmp_path, user=tmp_path / "user"),
+        [(op, "fla", case), (op, "liger", case)],
+        "TestDevice",
+    )
+    cached = _record_index(usable)
     assert (op.name, "fla", case.case_id, grad) in cached  # untouched adapter stays cached
     assert (op.name, "liger", case.case_id, grad) not in cached  # edited adapter is measured again
 
@@ -505,14 +744,18 @@ def test_only_still_honours_a_named_op(tmp_path):
 def test_isolated_case_records_a_timeout_without_killing_the_run(monkeypatch):
     op = popcorn.KERNELS["rms_norm"]
     case = cases(op, limit=1)[0]
+    seen = []
 
-    def hang(*args, **kwargs):
+    def hang(command, **kwargs):
+        seen.extend(command)
         raise subprocess.TimeoutExpired(cmd="run-case", timeout=kwargs.get("timeout", 0))
 
     monkeypatch.setattr(subprocess, "run", hang)
-    record = _isolated(op, "torch", case, "cpu", reps=1, timeout=7)
+    record = _isolated(op, "torch", case, "cpu", reps=1, timeout=7, grad=False)
     assert record.result.status == "timeout"
+    assert record.result.grad is False
     assert record.result.reason == "no result within 7s"
+    assert "--no-grad" in seen
 
 
 def test_isolated_case_records_a_crash_when_the_worker_dies(monkeypatch):

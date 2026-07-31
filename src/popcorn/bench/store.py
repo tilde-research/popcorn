@@ -4,7 +4,7 @@ import json
 import os
 import warnings
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
@@ -279,6 +279,40 @@ class Store:
             and matching(impl_hash, record.environment.impl_hash)
         ]
         return max(found, key=lambda record: (conclusive(record), record.environment.ts), default=None)
+
+    def reference_bench(
+        self,
+        op: str,
+        case_id: str,
+        config: Mapping[str, Any],
+        device: str,
+        torch_version: str,
+        grad: bool,
+        ref_hash: str | None,
+    ) -> dict[str, float] | None:
+        """Reusable torch timing for this exact reference case, never correctness evidence."""
+        found = [
+            record
+            for record in self.merged(op)
+            if record.impl == "torch"
+            and record.case_id == case_id
+            and record.config == config
+            and record.environment.device == device
+            and record.environment.torch == torch_version
+            and record.environment.backend_version is None
+            and record.result.grad == grad
+            and record.result.status == "pass"
+            and record.result.benchmarked
+            and matching(ref_hash, record.environment.ref_hash)
+        ]
+        record = max(found, key=lambda row: row.environment.ts, default=None)
+        if record is None:
+            return None
+        bench = {name: value for name, value in record.result.bench.items() if name.startswith("ref_")}
+        bench.update(
+            {f"ref_{name}": value for name, value in record.result.bench.items() if name.startswith(("fwd_", "bwd_"))}
+        )
+        return bench if "ref_fwd_ms" in bench else None
 
     def write_user(self, records: Iterable[Record]) -> None:
         write(records, self.user)

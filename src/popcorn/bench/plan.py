@@ -26,6 +26,46 @@ EFFORT = {
 }
 
 
+def oom_dominates(oom: Case, candidate: Case) -> bool:
+    """Whether `candidate` is no smaller than an OOM in every shape coordinate.
+
+    Dtype, scalar arguments, optional tensors, and batch rank must match. A
+    mixed tradeoff remains runnable: lowering any dim is enough to escape the
+    dominated region even when another dim grows.
+    """
+    if (
+        oom.dtype != candidate.dtype
+        or dict(oom.args) != dict(candidate.args)
+        or oom.present != candidate.present
+        or len(oom.batch) != len(candidate.batch)
+    ):
+        return False
+    oom_dims, candidate_dims = dict(oom.dims), dict(candidate.dims)
+    if oom_dims.keys() != candidate_dims.keys():
+        return False
+    return all(candidate_dims[name] >= value for name, value in oom_dims.items()) and all(
+        candidate_value >= oom_value for oom_value, candidate_value in zip(oom.batch, candidate.batch)
+    )
+
+
+class OOMFrontier:
+    """Minimal observed OOM points under coordinate-wise shape dominance."""
+
+    def __init__(self, cases: Sequence[Case] = ()) -> None:
+        self._cases: list[Case] = []
+        for case in cases:
+            self.add(case)
+
+    def blocker(self, candidate: Case) -> Case | None:
+        return next((case for case in self._cases if oom_dominates(case, candidate)), None)
+
+    def add(self, case: Case) -> None:
+        if self.blocker(case) is not None:
+            return
+        self._cases = [current for current in self._cases if not oom_dominates(case, current)]
+        self._cases.append(case)
+
+
 def _anchor(op: Any) -> dict[str, int]:
     return {name: _dim_pool(op, name)[0] for name in sorted(op._dims)}
 

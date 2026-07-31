@@ -1,12 +1,15 @@
 """GPU-free tests for Space algebra, region fitting, and the probe planner."""
 
 import random
+from itertools import combinations, product
+from math import prod
 
 import torch
 
 from popcorn.bench.fit import Region, fit, stratum
+from popcorn.bench.grid import _regroup, cases, covering_cases
 from popcorn.bench.model import Case, Environment, Record, Result
-from popcorn.bench.plan import plan
+from popcorn.bench.plan import OOMFrontier, oom_dominates, plan
 from popcorn.core.args import partition_args
 from popcorn.core.dispatcher import Dispatcher
 from popcorn.core.spaces import Div, Pow2, Range, Real, Space, contains, space
@@ -111,6 +114,103 @@ class TestFit:
 
 
 class TestPlan:
+    def test_pairwise_grid_covers_every_declared_dim_and_case_axis(self, monkeypatch):
+        from popcorn.core import dims as dims_mod
+
+        def reference(
+            x: Float[Tensor, "X Y Z"],
+            bias: Float[Tensor, "Z"] | None = None,
+            flag: bool = False,
+        ):
+            return x if bias is None or not flag else x + bias
+
+        monkeypatch.setitem(dims_mod.DIMS, "X", {2, 4})
+        monkeypatch.setitem(dims_mod.DIMS, "Y", {3, 6, 9})
+        monkeypatch.setitem(dims_mod.DIMS, "Z", {5, 10})
+        grid = covering_cases(Dispatcher(reference))
+        axes = {
+            "X": [2, 4],
+            "Y": [3, 6, 9],
+            "Z": [5, 10],
+            "dtype": ["float32", "float16", "bfloat16"],
+            "flag": [False, True],
+            "bias": [False, True],
+        }
+
+        def coordinates(case):
+            dims = dict(case.dims)
+            return {
+                **dims,
+                "dtype": str(case.dtype).removeprefix("torch."),
+                "flag": dict(case.args)["flag"],
+                "bias": "bias" in case.present,
+            }
+
+        rows = [coordinates(case) for case in grid]
+        for left, right in combinations(axes, 2):
+            assert {(row[left], row[right]) for row in rows} == set(product(axes[left], axes[right]))
+        assert len(grid) < prod(map(len, axes.values()))
+        assert dict(grid[0].dims) == {"X": 2, "Y": 3, "Z": 5}
+
+    def test_regroup_snaps_kv_heads_onto_the_largest_divisor_of_q_heads(self):
+        for q_heads, kv_heads, expected in ((6, 4, 3), (2, 8, 2), (128, 40, 32), (32, 8, 8), (6, 6, 6), (1, 128, 1)):
+            values = {"q_heads": q_heads, "kv_heads": kv_heads}
+            _regroup(values)
+            assert values["kv_heads"] == expected
+
+    def test_regroup_leaves_dims_alone_unless_both_head_counts_are_declared(self):
+        for values in ({"heads": 8, "kv_heads": 32}, {"q_heads": 2}, {"seq": 16}):
+            unchanged = dict(values)
+            _regroup(values)
+            assert values == unchanged
+
+    def test_grouped_query_grids_only_emit_expressible_head_counts(self, monkeypatch):
+        from popcorn.core import dims as dims_mod
+
+        def reference(q: Float[Tensor, "seq q_heads dim"], k: Float[Tensor, "seq kv_heads dim"]):
+            return q + k.repeat_interleave(q.shape[1] // k.shape[1], 1)
+
+        monkeypatch.setitem(dims_mod.DIMS, "q_heads", {2, 6})
+        monkeypatch.setitem(dims_mod.DIMS, "kv_heads", {1, 4, 8})
+        monkeypatch.setitem(dims_mod.DIMS, "seq", {8})
+        monkeypatch.setitem(dims_mod.DIMS, "dim", {16})
+        op = Dispatcher(reference)
+
+        grid = covering_cases(op)
+        sampled = cases(op, limit=32)
+        assert grid and sampled
+        for case in [*grid, *sampled]:
+            dims = dict(case.dims)
+            assert dims["q_heads"] % dims["kv_heads"] == 0
+
+        # Repair snaps down to the nearest divisor rather than collapsing every row to MQA.
+        assert {dims["kv_heads"] for dims in map(dict, (case.dims for case in grid))} == {1, 2, 3, 6}
+
+    def test_oom_frontier_prunes_only_coordinate_wise_larger_shapes(self):
+        def case(x, y, z, *, dtype=torch.float32, batch=(2,), flag=False):
+            return Case(
+                (("X", x), ("Y", y), ("Z", z)),
+                batch,
+                dtype,
+                (("flag", flag),),
+                frozenset(),
+            )
+
+        oom = case(4, 8, 16)
+        frontier = OOMFrontier([oom])
+        assert oom_dominates(oom, case(8, 8, 16))
+        assert frontier.blocker(case(4, 16, 16)) == oom
+        assert frontier.blocker(case(4, 8, 32)) == oom
+        assert frontier.blocker(case(2, 8, 32)) is None
+        assert frontier.blocker(case(8, 4, 32)) is None
+        assert frontier.blocker(case(8, 8, 16, batch=(4,))) == oom
+        assert frontier.blocker(case(8, 8, 16, dtype=torch.float16)) is None
+        assert frontier.blocker(case(8, 8, 16, flag=True)) is None
+
+        smaller = case(2, 4, 8)
+        frontier.add(smaller)
+        assert frontier.blocker(oom) == smaller
+
     def test_emits_screen_points_then_fixpoints(self, monkeypatch):
         from popcorn.core import dims as dims_mod
 

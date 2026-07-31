@@ -68,6 +68,28 @@ class BenchmarkService:
     def _registered(self, backend: str) -> Implementation:
         return next(candidate for candidate in self.op._impls if candidate.name == backend)
 
+    def _reference_bench(
+        self,
+        backend: str,
+        case: Case,
+        device: torch.device | str,
+        grad: bool,
+        benchmark: bool,
+    ) -> Mapping[str, float] | None:
+        if not benchmark:
+            return None
+        if backend == "torch":
+            return {}  # one timing pass is enough when the subject is the reference
+        return self.store.reference_bench(
+            self.op.name,
+            case.case_id,
+            case.config(),
+            device_name(device),
+            torch.__version__,
+            grad,
+            self.op.fingerprint,
+        )
+
     def _compare(
         self,
         chosen: Implementation,
@@ -77,6 +99,7 @@ class BenchmarkService:
         benchmark: bool,
         repeats: int,
         warmup: int,
+        reference_bench: Mapping[str, float] | None = None,
     ) -> Result:
         try:
             return compare_inputs(
@@ -87,6 +110,7 @@ class BenchmarkService:
                 benchmark=benchmark,
                 repeats=repeats,
                 warmup=warmup,
+                reference_bench=reference_bench,
             )
         except Exception as error:
             return Result("error", f"harness: {type(error).__name__}: {error}", grad=backward)
@@ -113,13 +137,24 @@ class BenchmarkService:
             return self._record(backend, case, Result("skip", "no backward implementation", grad=grad), device)
         try:
             first = make_inputs(self.op, case, device, grad=grad)
+        except torch.OutOfMemoryError as error:
+            result = Result("oom", f"inputs: {error}", grad=grad)
+            return self._record(backend, case, result, device)
         except Exception as error:
             result = Result("error", f"inputs: {type(error).__name__}: {error}", grad=grad)
             return self._record(backend, case, result, device)
         if rejection := chosen.rejects(self.op._values(first), first):
             return self._record(backend, case, Result("skip", rejection, grad=grad), device)
         inputs = chain((first,), (make_inputs(self.op, case, device, seed, grad) for seed in range(1, trials)))
-        result = self._compare(chosen, inputs, backward=grad, benchmark=benchmark, repeats=trials, warmup=warmup)
+        result = self._compare(
+            chosen,
+            inputs,
+            backward=grad,
+            benchmark=benchmark,
+            repeats=trials,
+            warmup=warmup,
+            reference_bench=self._reference_bench(backend, case, device, grad, benchmark),
+        )
         return self._record(backend, case, result, device)
 
     def run_backend(
@@ -144,10 +179,17 @@ class BenchmarkService:
         chosen = self.op[backend]
         if rejection := chosen.rejects(self.op._values(arguments), arguments):
             raise DispatchError(f"{self.op.name}: backend {backend!r} rejected call: {rejection}")
+        case = _case_from_call(call)
         result = self._compare(
-            chosen, repeat(arguments, repeats), backward=call.grad, benchmark=benchmark, repeats=repeats, warmup=warmup
+            chosen,
+            repeat(arguments, repeats),
+            backward=call.grad,
+            benchmark=benchmark,
+            repeats=repeats,
+            warmup=warmup,
+            reference_bench=self._reference_bench(backend, case, call.device, call.grad, benchmark),
         )
-        return self._record(backend, _case_from_call(call), result, call.device)
+        return self._record(backend, case, result, call.device)
 
     def _run_and_store(
         self, call: Call, arguments: Mapping[str, Any], backends: Iterable[str], benchmark: bool
@@ -195,7 +237,12 @@ class BenchmarkService:
         return self._run_and_store(call, arguments, [backend for backend in backends if backend != "torch"], benchmark)
 
     def incomplete(
-        self, backend: str, case: Case, device: torch.device | str, reason: str = "worker did not complete case"
+        self,
+        backend: str,
+        case: Case,
+        device: torch.device | str,
+        reason: str = "worker did not complete case",
+        grad: bool | None = None,
     ) -> Record:
-        result = Result("error", reason, grad=not self._registered(backend).forward_only)
+        result = Result("error", reason, grad=not self._registered(backend).forward_only if grad is None else grad)
         return self._record(backend, case, result, device)

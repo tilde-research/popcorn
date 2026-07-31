@@ -57,13 +57,6 @@ uv run python -m popcorn.bench pull
 
 A backend is eligible only when its package is installed at a declared supported version: auto-dispatch skips unavailable ones, and forcing one raises with the install hint or version error. First-party kernels (the `popcorn` backend) are always included.
 
-### Benchmarking on your own hardware
-The shipped cache covers the hardware it was recorded on. To measure the combinations your machine has no timing for and add them to your local cache:
-```bash
-uv run python -m popcorn.bench fill            # every op; --limit N to subsample large grids
-```
-Already-cached combinations are skipped; pass `--force` to re-measure them. Dispatch picks these up on the next call.
-
 ### Installing Backends
 To install the prerequisites for an additional backend:
 ```bash
@@ -104,7 +97,7 @@ The agent optimization loop (`python -m popcorn.bench.loop`) is inspired by [Aut
 
 ```bibtex
 @software{popcorn,
-  author = {{Tilde Research}},
+  author = {Timor Averbuch},
   title  = {Popcorn: kernel dispatch for PyTorch},
   url    = {https://github.com/tilde-research/popcorn},
   year   = {2026}

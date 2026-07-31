@@ -54,6 +54,22 @@ def _dim_pool(_op: Any, name: str) -> list[int]:
     return space(spec).grid(seeds=GRID)
 
 
+def _regroup(values: dict[str, Any]) -> None:
+    """Snap `kv_heads` onto a divisor of `q_heads`, in place.
+
+    Grouped-query attention folds `q_heads // kv_heads` query heads onto each kv head, so
+    counts that do not divide describe no attention layer an op can express: the reference
+    builds an empty tensor and every implementation raises. The two pools are declared
+    independently and over half of their pairings are that shape, so this would otherwise
+    be the single largest source of wasted cases. Repairing the row rather than dropping
+    it keeps whatever the row was covering on every other axis.
+    """
+    q, kv = values.get("q_heads"), values.get("kv_heads")
+    if q is None or kv is None or (kv <= q and q % kv == 0):
+        return
+    values["kv_heads"] = max(group for group in range(1, min(q, kv) + 1) if q % group == 0)
+
+
 def _unrank(index: int, sizes: Sequence[int]) -> list[int]:
     coords = []
     for size in reversed(sizes):
@@ -61,6 +77,106 @@ def _unrank(index: int, sizes: Sequence[int]) -> list[int]:
         index //= size
     coords.reverse()
     return coords
+
+
+def _pairwise_indices(sizes: Sequence[int]) -> list[tuple[int, ...]]:
+    """Deterministic covering array: every value pair across every two axes."""
+    if not sizes or any(size < 1 for size in sizes):
+        return []
+    order = sorted(range(len(sizes)), key=lambda index: (-sizes[index], index))
+    rows = [[value] for value in range(sizes[order[0]])]
+    for position, axis in enumerate(order[1:], start=1):
+        size = sizes[axis]
+        prior_sizes = [sizes[index] for index in order[:position]]
+        uncovered = {
+            (prior, prior_value, value)
+            for prior, prior_size in enumerate(prior_sizes)
+            for prior_value in range(prior_size)
+            for value in range(size)
+        }
+
+        # Extend existing rows with the value that covers the most new pairs.
+        for row_index, row in enumerate(rows):
+            scores = [sum((prior, row[prior], value) in uncovered for prior in range(position)) for value in range(size)]
+            best = max(scores)
+            choices = [value for value, score in enumerate(scores) if score == best]
+            value = choices[row_index % len(choices)]
+            row.append(value)
+            for prior in range(position):
+                uncovered.discard((prior, row[prior], value))
+
+        # Rare pairs left after horizontal growth each seed one additional row.
+        while uncovered:
+            prior, prior_value, value = min(uncovered)
+            row = [0] * position + [value]
+            row[prior] = prior_value
+            for other, prior_size in enumerate(prior_sizes):
+                if other == prior:
+                    continue
+                choices = [candidate for candidate in range(prior_size) if (other, candidate, value) in uncovered]
+                row[other] = choices[0] if choices else 0
+            for other in range(position):
+                uncovered.discard((other, row[other], value))
+            rows.append(row)
+
+    restored = []
+    for row in rows:
+        coordinates = [0] * len(sizes)
+        for position, axis in enumerate(order):
+            coordinates[axis] = row[position]
+        restored.append(tuple(coordinates))
+    return restored
+
+
+def covering_cases(op: Any) -> list[Case]:
+    """Pairwise-cover every declared dim and case axis, smallest shapes first.
+
+    Full products reach hundreds of millions of cases. A covering array keeps
+    every value and every two-axis interaction while leaving higher-order
+    combinations to adaptive follow-up. Ordering by dimension rank lets an
+    online runner discover an OOM boundary before reaching dominated shapes.
+    """
+    if missing := [name for name, pool in op.arg_pools.items() if pool is None]:
+        raise TypeError(f"{op.name}: arguments {missing} need test_args, a default, or a Literal annotation")
+    has_ellipsis = any(... in spec.tokens for spec in op.specs)
+    dim_names = sorted(op._dims | ({ELLIPSIS} if has_ellipsis else set()))
+    dim_pools = [_dim_pool(op, name) for name in dim_names]
+    arg_names = [name for name, pool in sorted(op.arg_pools.items()) if pool is not None]
+    arg_pools = [list(op.arg_pools[name]) for name in arg_names]
+    opt_names = sorted({spec.param for spec in op.specs if spec.optional})
+    dtypes = list(DTYPES if any("float" in dtype for spec in op.specs for dtype in spec.dtypes) else (torch.float32,))
+    pools: list[list[Any]] = [*dim_pools, dtypes, *arg_pools, *([[False, True]] * len(opt_names))]
+    sizes = [len(pool) for pool in pools]
+    if any(size == 0 for size in sizes):
+        return []
+
+    coordinates = [
+        (0,) * len(sizes),
+        *_pairwise_indices(sizes),
+        tuple(size - 1 for size in sizes),
+    ]
+    dim_count = len(dim_names)
+    coordinates.sort(key=lambda row: (sum(row[:dim_count]), max(row[:dim_count], default=0), row))
+
+    found: list[Case] = []
+    seen: set[str] = set()
+    for row in coordinates:
+        cursor = 0
+        values = {name: pool[row[cursor + offset]] for offset, (name, pool) in enumerate(zip(dim_names, dim_pools))}
+        cursor += dim_count
+        _regroup(values)
+        leading = values.pop(ELLIPSIS, None)
+        batch = () if leading is None or leading == 0 else (leading,)
+        dtype = dtypes[row[cursor]]
+        cursor += 1
+        args = tuple((name, pool[row[cursor + offset]]) for offset, (name, pool) in enumerate(zip(arg_names, arg_pools)))
+        cursor += len(arg_names)
+        present = frozenset(name for offset, name in enumerate(opt_names) if row[cursor + offset])
+        case = Case(tuple(sorted(values.items())), batch, dtype, args, present)
+        if case.case_id not in seen:
+            seen.add(case.case_id)
+            found.append(case)
+    return found
 
 
 def cases(op: Any, limit: int | None = None) -> list[Case]:
@@ -93,6 +209,7 @@ def cases(op: Any, limit: int | None = None) -> list[Case]:
         cursor = 0
         values = {name: pool[coords[cursor + offset]] for offset, (name, pool) in enumerate(zip(dim_names, dim_pools))}
         cursor += len(dim_names)
+        _regroup(values)
         leading = values.pop(ELLIPSIS, None)
         batch = () if leading is None or leading == 0 else (leading,)
         dims = [(name, values[name]) for name in sorted(values)]
@@ -103,7 +220,12 @@ def cases(op: Any, limit: int | None = None) -> list[Case]:
         dtype = dtypes[coords[cursor]]
         return Case(tuple(dims), batch, dtype, tuple(args), present)
 
-    return [build(index) for index in indices]
+    # Repairing head counts can collapse two draws onto one case, so `limit` is a ceiling.
+    found: dict[str, Case] = {}
+    for index in indices:
+        case = build(index)
+        found.setdefault(case.case_id, case)
+    return list(found.values())
 
 
 def _transform(

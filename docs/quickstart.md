@@ -31,8 +31,10 @@ back to the reference for every call and says so. Refresh it at any time with:
 uv run python -m popcorn.bench pull
 ```
 
-The shipped cache covers the hardware it was recorded on. To measure what your own machine has no
-timing for and add it to your local cache, use `python -m popcorn.bench fill`. Already-cached
+The shipped cache covers the hardware it was recorded on. To pairwise-cover every declared
+dimension value and add missing timings to your local cache, use `python -m popcorn.bench fill`.
+Smaller shapes run first. An observed OOM prunes only shapes that are no smaller in every dimension
+with the same dtype and options, while mixed dimension tradeoffs still run. Already-cached
 combinations are skipped, and `--force` re-measures them.
 
 A backend is eligible only when its package is installed at a declared supported version:

@@ -16,9 +16,9 @@ import torch
 import popcorn.kernels  # noqa: F401
 from popcorn import KERNELS
 from popcorn.bench import hub
-from popcorn.bench.grid import cases
+from popcorn.bench.grid import cases, covering_cases
 from popcorn.bench.model import Case, Record
-from popcorn.bench.plan import EFFORT, plan
+from popcorn.bench.plan import EFFORT, OOMFrontier, plan
 from popcorn.bench.readme import refresh
 from popcorn.bench.store import (
     BUNDLED_REPORTS,
@@ -147,18 +147,41 @@ def _work(
     return work
 
 
-def _isolated(op: Dispatcher, backend: str, case: Case, device: str, reps: int, timeout: int) -> Record:
+def _covering_work(ops: list[str], backend: str | None = None) -> list[tuple[Dispatcher, str, Case]]:
+    """Pairwise coverage of every declared case axis for each selected implementation."""
+    work = []
+    for op in (KERNELS[name] for name in ops or sorted(KERNELS)):
+        op_cases = covering_cases(op)
+        for candidate in op.available_backends():
+            if candidate != "torch" and backend in (None, candidate):
+                work.extend((op, candidate, case) for case in op_cases)
+    return work
+
+
+def _isolated(
+    op: Dispatcher,
+    backend: str,
+    case: Case,
+    device: str,
+    reps: int,
+    timeout: int,
+    grad: bool | None = None,
+) -> Record:
     """Run one case in a worker process so a hang or a hard crash costs only that case."""
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
         out = Path(handle.name)
     command = [sys.executable, "-m", "popcorn.bench", "run-case", "--op", op.name, "--impl", backend]
     command += ["--case", json.dumps(case.config()), "--device", device, "--reps", str(reps), "--out", str(out)]
+    if grad is not None:
+        command.append("--grad" if grad else "--no-grad")
     try:
         try:
             process = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             record = op.bench.incomplete(backend, case, device, f"no result within {timeout}s")
             record.result.status = "timeout"
+            if grad is not None:
+                record.result.grad = grad
             return record
         try:
             return Record.from_dict(json.loads(out.read_text()))
@@ -166,6 +189,8 @@ def _isolated(op: Dispatcher, backend: str, case: Case, device: str, reps: int, 
             tail = "; ".join((process.stderr or process.stdout).strip().splitlines()[-8:])
             record = op.bench.incomplete(backend, case, device, f"worker exit {process.returncode}: {tail}")
             record.result.status = "crash"
+            if grad is not None:
+                record.result.grad = grad
             return record
     finally:
         out.unlink(missing_ok=True)
@@ -174,7 +199,7 @@ def _isolated(op: Dispatcher, backend: str, case: Case, device: str, reps: int, 
 def cmd_run_case(args: argparse.Namespace) -> None:
     """One case, one process: the isolated half of `run`. Not meant to be called directly."""
     op = KERNELS[args.op]
-    record = op.bench.run_case(args.impl, Case.from_config(json.loads(args.case)), args.device, args.reps)
+    record = op.bench.run_case(args.impl, Case.from_config(json.loads(args.case)), args.device, args.reps, grad=args.grad)
     Path(args.out).write_text(json.dumps(record.to_dict(), sort_keys=True))
 
 
@@ -332,30 +357,38 @@ def _impl(op: Dispatcher, name: str) -> Implementation:
     return next(candidate for candidate in op._impls if candidate.name == name)
 
 
-def _cached(store: Store, work: list[tuple[Dispatcher, str, Case]], device: str) -> dict[tuple[str, str, str, bool], Record]:
-    """The best row this machine already holds per (op, impl, case), ignoring rows it cannot use.
-
-    Evidence from another GPU, Torch build, backend version, or revision of the code says
-    nothing about what to run here, so those rows are not treated as cached.
-    """
-    best: dict[tuple[str, str, str, bool], Record] = {}
-    for name in dict.fromkeys(op.name for op, _, _ in work):
+def _usable_records(store: Store, work: list[tuple[Dispatcher, str, Case]], device: str) -> list[Record]:
+    """Rows produced by this hardware, dependency set, and current source fingerprints."""
+    usable = []
+    selected: dict[str, set[str]] = {}
+    for op, impl, _ in work:
+        selected.setdefault(op.name, set()).add(impl)
+    for name, selected_impls in selected.items():
         op = KERNELS[name]
         implementations = {impl.name: impl for impl in op._impls}
         for record in store.merged(name):
             environment = record.environment
             implementation = implementations.get(record.impl)
-            usable = (
+            if (
                 implementation is not None
+                and record.impl in selected_impls
                 and environment.device == device
                 and environment.torch == torch.__version__
                 and environment.backend_version == installed_version(record.impl)
                 and matching(op.fingerprint, environment.ref_hash)
                 and matching(implementation.fingerprint, environment.impl_hash)
-            )
-            key = (record.op, record.impl, record.case_id, record.result.grad)
-            if usable and (key not in best or prefer(record, best[key])):
-                best[key] = record
+            ):
+                usable.append(record)
+    return usable
+
+
+def _record_index(records: list[Record]) -> dict[tuple[str, str, str, bool], Record]:
+    """Best usable row per op, implementation, case, and gradient mode."""
+    best: dict[tuple[str, str, str, bool], Record] = {}
+    for record in records:
+        key = (record.op, record.impl, record.case_id, record.result.grad)
+        if key not in best or prefer(record, best[key]):
+            best[key] = record
     return best
 
 
@@ -365,31 +398,46 @@ def _fill_pending(record: Record | None) -> bool:
 
 
 def cmd_fill(args: argparse.Namespace) -> None:
-    """Benchmark every grid combination this machine has no timed row for, into the user cache.
+    """Benchmark pairwise case coverage this machine has no timed row for, into the user cache.
 
-    Dispatch selects on recorded timings, so an unmeasured combination is invisible to it. This
-    walks the grid, skips what is already cached, and measures the rest.
+    Pairwise coverage includes every declared dim value without materializing the full product.
+    Observed OOMs prune only coordinate-wise larger shapes in the same case stratum.
     """
     args.device = _target_device(args)
     device = device_name(args.device)
     store = Store()
-    work = [(op, impl, case) for op, impl, case in _work(args.ops, args.backend, args.limit) if available(impl)]
+    planned = _work(args.ops, args.backend, args.limit) if args.limit is not None else _covering_work(args.ops, args.backend)
+    work = [(op, impl, case) for op, impl, case in planned if available(impl)]
     if not work:
         raise SystemExit("no matching installed non-torch backend cases")
-    cached = {} if args.force else _cached(store, work, device)
+    current = _usable_records(store, work, device)
+    cached = {} if args.force else _record_index(current)
+    frontiers: dict[tuple[str, str, bool], OOMFrontier] = {}
+    if not args.force:
+        for record in current:
+            if record.result.status == "oom":
+                key = (record.op, record.impl, record.result.grad)
+                frontiers.setdefault(key, OOMFrontier()).add(Case.from_config(record.config))
     todo = [
         (op, impl, case)
         for op, impl, case in work
         if _fill_pending(cached.get((op.name, impl, case.case_id, not _impl(op, impl).forward_only)))
     ]
-    print(f"{len(work)} case-impl pairs: {len(work) - len(todo)} already cached, {len(todo)} to measure")
+    print(f"{len(work)} case-impl pairs: {len(work) - len(todo)} already cached, {len(todo)} to consider")
     isolation = "in-process" if args.in_process else f"{args.timeout}s/case worker"
     if not todo:
         return
-    print(f"measuring {len(todo)} ({isolation}) -> {store.user}")
+    print(f"measuring with monotonic OOM pruning ({isolation}) -> {store.user}")
     pending: list[Record] = []
     tally: Counter[str] = Counter()
-    for index, (op, impl, case) in enumerate(todo, start=1):
+    pruned = 0
+    measured = 0
+    for op, impl, case in todo:
+        key = (op.name, impl, not _impl(op, impl).forward_only)
+        frontier = frontiers.setdefault(key, OOMFrontier())
+        if frontier.blocker(case) is not None:
+            pruned += 1
+            continue
         if args.in_process:
             try:
                 record = op.bench.run_case(impl, case, args.device, args.reps)
@@ -398,16 +446,21 @@ def cmd_fill(args: argparse.Namespace) -> None:
         else:
             record = _isolated(op, impl, case, args.device, args.reps, args.timeout)
         pending.append(record)
+        measured += 1
         tally[record.result.status] += 1
-        if len(pending) >= args.flush or index == len(todo):
+        if record.result.status == "oom":
+            frontier.add(case)
+        if len(pending) >= args.flush:
             store.write_user(pending)
             pending.clear()
         try:
             torch.zeros(1, device=args.device).item()
         except Exception as error:
             store.write_user(pending)
-            raise SystemExit(f"device poisoned after {index} of {len(todo)}: {type(error).__name__}: {error}") from None
-    print(f"cached {len(todo)} row(s) -> {store.user}")
+            raise SystemExit(f"device poisoned after {measured} measurements: {type(error).__name__}: {error}") from None
+    if pending:
+        store.write_user(pending)
+    print(f"cached {measured} row(s), pruned {pruned} dominated shape(s) -> {store.user}")
     for status, count in tally.most_common():
         print(f"  {status}: {count}")
 
@@ -552,6 +605,7 @@ def main() -> None:
     run_case.add_argument("--case", required=True, help="JSON case config")
     run_case.add_argument("--device", default="cuda")
     run_case.add_argument("--reps", type=_positive, default=10)
+    run_case.add_argument("--grad", action=argparse.BooleanOptionalAction, default=None)
     run_case.add_argument("--out", required=True)
     run_case.set_defaults(fn=cmd_run_case)
 
@@ -562,13 +616,13 @@ def main() -> None:
     merge.add_argument("sources", nargs="*")
     merge.set_defaults(fn=cmd_merge)
 
-    fill = sub.add_parser("fill", help="benchmark whatever this machine has no timed row for, into the user cache")
+    fill = sub.add_parser("fill", help="pairwise-cover declared dims not timed on this machine, into the user cache")
     fill.add_argument("ops", nargs="*", help="ops to measure (default: all registered)")
     fill.add_argument("--backend", help="restrict to one backend")
     fill.add_argument("--device", default="cuda")
     fill.add_argument("--hardware", help=HARDWARE_HELP)
     fill.add_argument("--reps", type=_positive, default=10)
-    fill.add_argument("--limit", type=_positive, help="subsample the grid to at most N cases per op")
+    fill.add_argument("--limit", type=_positive, help="use the legacy random grid sample of at most N cases per op")
     fill.add_argument("--timeout", type=_positive, default=30, help="seconds per case worker before it is killed")
     fill.add_argument("--in-process", action="store_true", help="run cases without a worker: no timeout, crashes end the run")
     fill.add_argument("--force", action="store_true", help="measure every combination, including ones already cached")
