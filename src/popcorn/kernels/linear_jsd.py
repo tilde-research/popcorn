@@ -2,7 +2,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
-from popcorn import Tag, kernel, register_kernel
+from popcorn import Tag, register_kernel
 from popcorn.kernels._utils import upcast
 from popcorn.kernels.jsd import generalized_jsd
 
@@ -28,11 +28,6 @@ def linear_jsd(
 
     [Liger Kernel (Hsu et al., 2024)](https://arxiv.org/abs/2410.10989)
     """
-    log_p = (upcast(F.linear(student, student_weight)) / temperature).log_softmax(-1)
-    log_q = (upcast(F.linear(teacher, teacher_weight)) / temperature).log_softmax(-1).detach()
-    return generalized_jsd(log_p, log_q, beta).sum() / student.shape[0]
-
-
-@linear_jsd.register("liger", source="liger_kernel.transformers.functional.liger_fused_linear_jsd")
-def linear_jsd_liger(student, teacher, student_weight, teacher_weight, beta, temperature):
-    return kernel(student, student_weight, teacher, teacher_weight, jsd_beta=beta, temperature=temperature)
+    log_p = (F.linear(upcast(student), upcast(student_weight)) / temperature).log_softmax(-1)
+    log_q = (F.linear(upcast(teacher), upcast(teacher_weight)) / temperature).log_softmax(-1).detach()
+    return generalized_jsd(log_p, log_q, beta).sum(-1).mean()

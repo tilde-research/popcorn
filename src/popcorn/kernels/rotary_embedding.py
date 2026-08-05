@@ -6,8 +6,8 @@ from popcorn import Tag, register_kernel
 from popcorn.kernels._utils import upcast
 
 
-# head_dim must equal 2 * half (full-width rotation); singleton test pools keep
-# the grid consistent. Partial rotary (head_dim > 2 * half) also dispatches.
+# Rotation touches 2 * half of head_dim channels: partial rotary (head_dim > 2 * half)
+# dispatches too, and the grid caps `half` at `head_dim // 2` (bench.grid._repair).
 # cos/sin are constants, matching the kernels.
 @register_kernel(
     tags={Tag.POSITIONAL},

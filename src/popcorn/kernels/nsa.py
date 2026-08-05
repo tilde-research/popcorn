@@ -16,12 +16,14 @@ def _nsa_deps():
 
 
 # fla's sliding-window branch calls flash-attn 2; the vendored kernel uses fa3.
-def _fla_ready(window_size, **_):
-    return _nsa_deps() and (window_size == 0 or bool(importlib.util.find_spec("flash_attn")))
+def _fla_ready(q, k, window_size, **_):
+    grouped = q.shape[2] % (16 * k.shape[2]) == 0
+    return grouped and _nsa_deps() and (window_size == 0 or bool(importlib.util.find_spec("flash_attn")))
 
 
-def _popcorn_ready(window_size, **_):
-    return _nsa_deps() and (window_size == 0 or bool(importlib.util.find_spec("flash_attn_interface")))
+def _popcorn_ready(q, k, window_size, **_):
+    grouped = q.shape[2] % (16 * k.shape[2]) == 0
+    return grouped and _nsa_deps() and (window_size == 0 or bool(importlib.util.find_spec("flash_attn_interface")))
 
 
 def _pool_blocks(x, block_size):

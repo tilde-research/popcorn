@@ -33,7 +33,17 @@ def multi_token_attention(
 
 
 # fp16 score gradients land just past tolerance.
-@multi_token_attention.register("liger", source="liger_kernel.transformers.functional.liger_multi_token_attention")
+def _liger_ready(**arguments):
+    """The upstream mask kernel maps flattened batch channels onto CUDA grid z."""
+    scores, weight = arguments["scores"], arguments["weight"]
+    return scores.shape[0] * max(scores.shape[1], weight.shape[0]) <= 65_535
+
+
+@multi_token_attention.register(
+    "liger",
+    source="liger_kernel.transformers.functional.liger_multi_token_attention",
+    predicate=_liger_ready,
+)
 def multi_token_attention_liger(
     scores: Float32[Tensor, "batch channels seq seq"] | BFloat16[Tensor, "batch channels seq seq"],
     weight,

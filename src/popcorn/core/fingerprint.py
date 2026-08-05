@@ -1,14 +1,18 @@
 """Normalized code fingerprints, stable across comments, docstrings, and formatting.
 
-A fingerprint hashes a callable's AST and, recursively, every kernel-code
-function or class it references, so recorded benchmarks stop matching when the
-code that produced them changes. Recursion stays within `SCOPES`: harness and
-core changes must not invalidate records, and external backends are already
-pinned by `backend_version`.
+A fingerprint hashes a callable's normalized source and, recursively, every
+kernel-code function or class it references. First-party `source=` modules are
+hashed statically with their local implementation imports, so missing optional
+libraries cannot disable staleness checks. The serializer emulates Python
+3.12's `ast.dump`, preserving callable hashes while filling the `type_params`
+field absent on 3.11. Recursion stays within `SCOPES`: harness and core changes
+must not invalidate records, and external backends are pinned separately by
+`backend_version`.
 """
 
 import ast
 import hashlib
+import importlib.util
 import inspect
 import sys
 import textwrap
@@ -46,6 +50,10 @@ def _normalized(target: Target) -> ast.Module:
     never reach the AST. Decorators carry registration metadata (test grids,
     sources, tags), not the code the benchmark measured."""
     tree = ast.parse(textwrap.dedent(inspect.getsource(target)))
+    return _clean(tree)
+
+
+def _clean(tree: ast.Module) -> ast.Module:
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             node.decorator_list.clear()
@@ -88,7 +96,71 @@ def _references(tree: ast.AST, space: Mapping[str, Any]) -> Iterator[Any]:
             yield getattr(space.get(node.value.id), node.attr, None)
 
 
-def fingerprint(*callables: Any) -> str | None:
+def _stable_dump(node: ast.AST) -> str:
+    """Python 3.12's compact AST dump, including empty definition type params."""
+
+    def format_value(value: Any) -> tuple[str, bool]:
+        if isinstance(value, ast.AST):
+            cls = type(value)
+            fields = list(value._fields)
+            if isinstance(value, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and "type_params" not in fields:
+                fields.append("type_params")
+            parts = []
+            simple = True
+            for name in fields:
+                field = [] if name == "type_params" and not hasattr(value, name) else getattr(value, name)
+                if field is None and getattr(cls, name, ...) is None:
+                    continue
+                rendered, child_simple = format_value(field)
+                simple = simple and child_simple
+                parts.append(f"{name}={rendered}")
+            if simple and len(parts) <= 3:
+                return f"{value.__class__.__name__}({', '.join(parts)})", not parts
+            return f"{value.__class__.__name__}({', '.join(parts)})", False
+        if isinstance(value, list):
+            if not value:
+                return "[]", True
+            return f"[{', '.join(format_value(item)[0] for item in value)}]", False
+        return repr(value), True
+
+    return format_value(node)[0]
+
+
+def _source_modules(source: str) -> list[tuple[str, ast.Module, Path]]:
+    """Local source module and local implementation modules it imports."""
+    root = source.rsplit(".", 1)[0]
+    queued = [root]
+    found: dict[str, tuple[ast.Module, Path]] = {}
+    while queued:
+        module = queued.pop()
+        if module in found:
+            continue
+        try:
+            spec = importlib.util.find_spec(module)
+        except (AttributeError, ImportError, ValueError):
+            continue
+        path = Path(spec.origin) if spec is not None and spec.origin else None
+        if path is None or path.suffix != ".py":
+            continue
+        tree = _clean(ast.parse(path.read_text()))
+        found[module] = (tree, path)
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                relative = "." * node.level + (node.module or "")
+                try:
+                    package = module.rpartition(".")[0]
+                    base = importlib.util.resolve_name(relative, package) if node.level else relative
+                    names = [base, *(f"{base}.{alias.name}" for alias in node.names if alias.name != "*")]
+                except (ImportError, ValueError):
+                    names = []
+            queued.extend(name for name in names if name.startswith(SCOPES))
+    return [(module, *found[module]) for module in sorted(found)]
+
+
+def fingerprint(*callables: Any, source: str | None = None) -> str | None:
     """Digest of the callables' normalized code, or None when nothing is hashable."""
     seen: set[Target] = set()
     queue: list[Target] = []
@@ -106,7 +178,7 @@ def fingerprint(*callables: Any) -> str | None:
             tree = _normalized(target)
         except (OSError, TypeError, SyntaxError):
             continue
-        hasher.update(ast.dump(tree, include_attributes=False).encode())
+        hasher.update(_stable_dump(tree).encode())
         hashed = True
         space = _namespace(target)
         for value in _references(tree, space):
@@ -117,4 +189,14 @@ def fingerprint(*callables: Any) -> str | None:
     for sibling in sorted(cuda, key=lambda path: path.name):
         hasher.update(sibling.read_bytes())
         hashed = True
+    if source is not None:
+        hasher.update(source.encode())
+        for module, tree, path in _source_modules(source):
+            hasher.update(module.encode())
+            hasher.update(_stable_dump(tree).encode())
+            if path.stem.endswith("_cu"):
+                sibling = path.with_name(path.stem.removesuffix("_cu") + ".cu")
+                if sibling.exists():
+                    hasher.update(sibling.read_bytes())
+            hashed = True
     return hasher.hexdigest()[:12] if hashed else None

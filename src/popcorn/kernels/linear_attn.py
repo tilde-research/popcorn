@@ -51,5 +51,5 @@ def linear_attn_fla(q, k, v, normalize, softmax_scale):
 
 
 @linear_attn.register("fla:recurrent", source="fla.ops.linear_attn.fused_recurrent_linear_attn", forward_only=True)
-def linear_attn_fla_recurrent(q, k, v, normalize, softmax_scale):
+def linear_attn_fla_recurrent(q, k, v, normalize, softmax_scale: float):
     return kernel(q, k, v, scale=softmax_scale, normalize=normalize)[0]

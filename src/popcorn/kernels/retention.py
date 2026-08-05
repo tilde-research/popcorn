@@ -6,6 +6,10 @@ from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import default_scale, upcast
 
 
+def _causal_decay(steps, gamma):
+    return torch.exp2(steps.clamp_min(0) * gamma.log2()[:, None, None]) * (steps >= 0)
+
+
 @register_kernel(
     test_args={"softmax_scale": [None, 0.25]},
     tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION},
@@ -30,7 +34,7 @@ def retention(
     gamma = 1 - torch.exp2(-5.0 - torch.arange(heads, device=q.device, dtype=q.dtype))
     n = torch.arange(seq, device=q.device, dtype=q.dtype)
     steps = n[:, None] - n[None, :]
-    decay = torch.exp2(steps * gamma.log2()[:, None, None]) * (steps >= 0)
+    decay = _causal_decay(steps, gamma)
     scores = torch.einsum("bqhk,bjhk->bhqj", q * scale, k)
     return torch.einsum("bhqj,bjhv->bqhv", scores * decay, v).to(dtype)
 

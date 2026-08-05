@@ -5,43 +5,44 @@ description: Install Popcorn and dispatch your first kernel
 
 ## Install
 
-Install Popcorn from PyPI using `uv`:
+Install Popcorn from PyPI with `uv`:
 
 ```bash
-uv pip install popcorn           # first-party only
-uv pip install "popcorn[liger]"  # + Liger-Kernel backends
-uv pip install "popcorn[fla]"    # + FLA backends
+uv pip install popcorn           # first-party kernels
+uv pip install "popcorn[liger]"  # Liger backends
+uv pip install "popcorn[fla]"    # FLA backends
+uv pip install "popcorn[cudnn]"  # cuDNN attention
+uv pip install "popcorn[transformer_engine]"  # Transformer Engine softmax
 ```
 
 > [!NOTE]
 > Add `--torch-backend=auto` to let `uv` select a PyTorch build for your hardware.
 
 > [!WARNING]
-> `pip install popcorn` may work but is not generally supported. Install the desired PyTorch build for your hardware first, then install Popcorn with pip.
+> `pip install popcorn` is not generally supported. If required, install the appropriate
+> PyTorch build before installing Popcorn.
 
-Add one extra per backend you want. There is no "everything" extra: the backends pin mutually
-exclusive requirements, so installing them together does not resolve.
+Install one extra for each required backend. Some backends have incompatible dependency
+requirements, so there is no combined extra.
 
-Installing also fetches the benchmark cache that dispatch selects implementations with, from the
-[popcorn-reports](https://huggingface.co/datasets/tilde-research/popcorn-reports) dataset at the
-revision this version pins. Set `POPCORN_SKIP_REPORTS=1` to install without it; popcorn then falls
-back to the reference for every call and says so. Refresh it at any time with:
+Installation fetches the pinned benchmark data from
+[popcorn-reports](https://huggingface.co/datasets/tilde-research/popcorn-reports).
+Set `POPCORN_SKIP_REPORTS=1` to install without reports. Automatic dispatch then uses the
+reference implementation. Refresh the reports with:
 
 ```bash
 uv run python -m popcorn.bench pull
 ```
 
-The shipped cache covers the hardware it was recorded on. To pairwise-cover every declared
-dimension value and add missing timings to your local cache, use `python -m popcorn.bench fill`.
-Smaller shapes run first. An observed OOM prunes only shapes that are no smaller in every dimension
-with the same dtype and options, while mixed dimension tradeoffs still run. Already-cached
-combinations are skipped, and `--force` re-measures them.
+Reports apply only to the hardware on which they were recorded. Use
+`python -m popcorn.bench fill` to measure missing cases on the current device. See
+[Benchmarking](./benchmarking.md) for details.
 
-A backend is eligible only when its package is installed at a declared supported version:
-auto-dispatch skips unavailable ones, and forcing one raises with the install hint or
-version error. First-party kernels (the `popcorn` backend) are always included.
+A backend is eligible only when a supported package version is installed. Automatic dispatch
+skips unavailable backends. Forcing an unavailable backend raises an installation or version
+error. First-party kernels under the `popcorn` backend are always available.
 
-Upgrade Popcorn and refresh its pinned report cache with:
+Upgrade Popcorn and its pinned reports with:
 
 ```bash
 uv pip install --upgrade popcorn
@@ -49,9 +50,8 @@ uv pip install --upgrade popcorn
 
 ## Call a kernel
 
-Import a kernel and call it with tensors. Popcorn dispatches the call to an eligible
-implementation, using benchmark data when available and the registered reference as a
-fallback.
+Import and call a kernel. Popcorn selects an eligible implementation using benchmark data,
+with the registered reference as the fallback.
 
 ```python
 import torch
@@ -63,7 +63,7 @@ weight = torch.ones(4096, device="cuda", dtype=torch.bfloat16)
 output = rms_norm(x, weight)
 ```
 
-To override automatic dispatching:
+To select a backend explicitly:
 
 ```python
 output = rms_norm["liger"](x, weight)
@@ -73,7 +73,7 @@ output = rms_norm(x, weight, backend="liger")
 
 ## Next steps
 
-- [Dispatching](./dispatching.md): how a call resolves to one implementation
-- [Validation](./validation.md): compare implementations against the reference
-- [Benchmarking](./benchmarking.md): record timings and route on data
-- [Kernel explorer](https://tilde-research.github.io/popcorn/kernels): every kernel, its math, backends, and measured performance
+- [Dispatching](./dispatching.md): Implementation selection
+- [Validation](./validation.md): Correctness checks
+- [Benchmarking](./benchmarking.md): Performance measurement
+- [Kernel explorer](https://tilde-research.github.io/popcorn/kernels): Kernels, backends, and results

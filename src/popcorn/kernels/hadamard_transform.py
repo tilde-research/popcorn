@@ -6,8 +6,10 @@ from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
+# The transform is only defined for power-of-two widths, which `hidden` cannot express,
+# so the op has its own dim whose pool holds nothing else (see core.dims).
 @register_kernel(test_args={"scale": [1.0, 0.5]}, tags={Tag.LINEAR})
-def hadamard_transform(x: Float[Tensor, "... hidden"], scale: float = 1.0) -> Float[Tensor, "... hidden"]:
+def hadamard_transform(x: Float[Tensor, "... hadamard_dim"], scale: float = 1.0) -> Float[Tensor, "... hadamard_dim"]:
     r"""Sylvester Hadamard transform along the last dimension (a power of two).
 
     $$y = s \, x H_d, \qquad H_{2d} = \begin{pmatrix} H_d & H_d \\ H_d & -H_d \end{pmatrix}$$

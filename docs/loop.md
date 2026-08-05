@@ -1,103 +1,93 @@
 ---
-title: Optimization loop
-description: Iterate on a candidate kernel with crash-isolated evals and a keep/revert log
+title: Optimization loop (Experimental)
+description: Experimental workflow for isolated candidate-kernel evaluation
 ---
 
-The loop harness turns first-party kernel work into a fixed experiment cycle — edit one
-candidate module, run one evaluation, keep or revert, repeat — designed so an autonomous
-agent can grind on an op for hours without weakening anything. Grading is the same
-comparison the grid harness uses (fp64-triangulated, budget-relative tolerances, forward
-and backward), and every case runs in its own subprocess, so a candidate that crashes or
-poisons the CUDA context never takes the session down with it.
+> [!WARNING]
+> This workflow is experimental. A passing loop result is not validation evidence.
 
-The loop is tooling, not evidence: it never writes report rows, dispatch never sees its
-results, and promotion still goes through the full grid.
+`popcorn.bench.loop` runs repeatable local experiments on first-party kernels. It evaluates a
+fixed sample, isolates each case in a subprocess, and records a `KEEP` or `REVERT` verdict.
+It does not write benchmark reports or affect dispatch. Promotion still requires the full
+validation grid.
 
-## Protocol
+## Workflow
 
 ```bash
-python -m popcorn.bench.loop targets              # 1. pick a target op
-git checkout -b loop/<op>                         # 2. branch
-git commit -am "exp 1: <hypothesis>"              # 3. commit, then evaluate
+python -m popcorn.bench.loop targets
+git checkout -b loop/<op>
+# Edit and commit one candidate change.
 python -m popcorn.bench.loop try <op> --tag exp1 --note "<what changed>"
-git reset --hard HEAD~1                           # 4. only when the verdict is REVERT
+python -m popcorn.bench.loop status <op>
 ```
 
-The candidate lives in `src/popcorn/impls/<op>_tl.py` (or `_cu.py`): a callable named
-exactly `<op>` with the reference signature, autograd handled inside — the same contract
-as [first-party kernels](https://github.com/tilde-research/popcorn/blob/main/CONTRIBUTING.md).
-`try` imports it directly, so no registration is needed while iterating.
+The candidate is `src/popcorn/impls/<op>_tl.py` or `<op>_cu.py`. It must export a callable
+named `<op>`, match the reference signature, and implement autograd where required. See the
+[first-party kernel contract](https://github.com/tilde-research/popcorn/blob/main/CONTRIBUTING.md#3b-first-party-kernels).
+`try` imports the candidate directly, so registration is not required during development.
 
-Make one focused change per experiment, commit before every `try`, and let the exit code
-drive git: `0` means keep the commit, `1` means reset it. When `status` shows a long
-revert streak, move to the next target.
+Keep each experiment to one committed change. Exit code `0` means keep the change; exit code
+`1` means revert it.
 
-## try
+## Evaluate
 
 ```bash
 python -m popcorn.bench.loop try rms_norm --cases 4 --reps 5 --vs liger --tag exp7
 ```
 
-- **Fixed sample.** `--cases N` draws a deterministic sample of the op's test grid — the
-  same cases every run — so totals are comparable across experiments. Timings only
-  compete against kept rows with the same sample, device, gradient mode, and reps;
-  changing the op's contract changes the sample and resets the baseline.
-- **Isolation.** Each case runs in a fresh worker process with a `--timeout`. A crash,
-  hang, or poisoned context is recorded for that case and the loop continues.
-- **Grading.** Identical to the grid harness: forward and backward against fp64 truth
-  across seeded draws, with the reference's own error as the budget. Statuses are
-  `pass`, `fail`, `crash`, `oom`, `error`, and `hang`.
-- **Verdict.** `KEEP` (exit 0) requires every case to pass and the summed time to beat
-  the best previously kept row by at least 1%; the first passing run sets the baseline.
-  Anything else is `REVERT` (exit 1) with the reason.
-- **Incumbent context.** `--vs <impl>` also times a registered implementation on the same
-  inputs, as an advisory column — the number to beat before promotion is worth it.
+- **Sample:** `--cases N` selects deterministic cases. Comparisons use kept rows with the
+  same sample, device, gradient mode, and repetition count. Contract changes reset the
+  baseline.
+- **Isolation:** Each case runs in a new process with a timeout. Crashes and hangs are
+  recorded without terminating the evaluation.
+- **Grading:** Forward and backward results are compared with fp64 truth using the same
+  tolerances as the grid harness. Statuses are `pass`, `fail`, `crash`, `oom`, `error`,
+  and `hang`.
+- **Verdict:** `KEEP` requires every case to pass and total time to improve by at least 1%
+  over the best kept result. The first passing run establishes the baseline.
+- **Comparison:** `--vs <impl>` times a registered implementation on the same inputs.
 - `--forward-only` skips backward grading and timing for inference-oriented kernels.
 
-Every run appends one JSON line — timestamp, tag, note, per-case results, totals,
-verdict, and a fingerprint of the candidate code — to
+Each run appends a JSON record with metadata, case results, totals, verdict, and candidate
+fingerprint to
 `${POPCORN_CACHE_DIR:-~/.cache/popcorn}/v<schema>/loop/<op>.jsonl` (override with `--log`),
-where `<schema>` is the current report schema version.
-The log is an untracked scratchpad; never commit it.
+where `<schema>` is the report schema version. Do not commit this log.
 
-## targets
+## Select targets
 
 ```bash
 python -m popcorn.bench.loop targets --hardware H100 --top 15
 ```
 
-Ranks ops by recorded headroom, worst-served first, from the bundled and user report
-rows:
+The command ranks operations by recorded performance headroom:
 
 | column | meaning |
 | --- | --- |
-| `recorded impls` | non-torch implementations with any recorded row |
-| `tested` | distinct (case, gradient mode) pairs with records |
-| `pass%` | share of tested pairs some implementation passes |
-| `grad%` | same, restricted to gradient-mode pairs |
-| `x best` | median over cases of the best implementation's speedup vs the reference |
-| `reg` | registered non-torch implementations |
+| `recorded impls` | Non-Torch implementations with records |
+| `tested` | Distinct case and gradient-mode pairs |
+| `pass%` | Tested pairs passed by at least one implementation |
+| `grad%` | Passed gradient-mode pairs |
+| `x best` | Median best speedup over the reference |
+| `reg` | Registered non-Torch implementations |
 
-Ops with no rows, speedups near 1x, or low `grad%` (forward-only incumbents) are the
-prime targets. `ISSUES.md` adds context on why an implementation is gated.
+Prioritize operations with no records, speedups near 1x, or low gradient coverage. Check
+`ISSUES.md` for known backend restrictions.
 
-## status
+## Review history
 
 ```bash
 python -m popcorn.bench.loop status rms_norm --last 8
 ```
 
-Per op: experiments run, keeps, the revert streak since the last keep (the plateau
-signal), the best kept total, and the most recent entries.
+The status includes experiment and keep counts, the current revert streak, the best kept
+time, and recent entries.
 
-## Guardrails
+## Promotion requirements
 
-- The loop edits exactly one module: the candidate under `src/popcorn/impls/`. The
-  reference, the harness, tolerances, and test inputs are read-only — a faster kernel
-  that needed a weaker harness is not faster.
-- A `KEEP` is a local verdict on a small sample, never a validation claim. Promotion is
-  unchanged: register the kernel under the `popcorn` backend, run the full grid to zero
-  `fail`/`crash`/`error`, and commit the reports
-  ([CONTRIBUTING.md](https://github.com/tilde-research/popcorn/blob/main/CONTRIBUTING.md)).
-- Loop workers never touch the report stores, and report rows are fingerprint-stamped,
-  so nothing recorded for an intermediate candidate can leak into dispatch.
+- Limit changes to the candidate module. Do not modify the reference, harness, tolerances,
+  or test inputs.
+- Treat `KEEP` as a local result, not a validation claim. Register the kernel under the
+  `popcorn` backend and run the full grid with zero `fail`, `crash`, `error`, or
+  `bench_error` results. Publish the rows and update the report revision as described in
+  [CONTRIBUTING.md](https://github.com/tilde-research/popcorn/blob/main/CONTRIBUTING.md).
+- Loop workers do not write report stores. Intermediate results cannot enter dispatch.

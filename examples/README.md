@@ -2,12 +2,12 @@
 
 | Notebook | What it shows |
 | --- | --- |
-| [01_optimize_modeling_code.ipynb](./01_optimize_modeling_code.ipynb) | Swap plain-torch ops for `popcorn.kernels` in a hybrid Wall-Attention / attention LM. |
-| [02_torch_compile_experimental.ipynb](./02_torch_compile_experimental.ipynb) | Experimental: inject kernels via `popcorn.compile` without editing the model. |
+| [01_optimize_modeling_code.ipynb](./01_optimize_modeling_code.ipynb) | Swap plain PyTorch ops for `popcorn.kernels`. |
+| [02_torch_compile_experimental.ipynb](./02_torch_compile_experimental.ipynb) | Add experimental compile rewrites without touching the model. |
+| [03_write_a_kernel.ipynb](./03_write_a_kernel.ipynb) | Add a new fused op: reference, Triton implementation, correctness, and benchmarks. |
 
-[`modeling_butter.py`](./modeling_butter.py) — HF-style model, no popcorn dependency. Pass any `ops` namespace with the same names at construction.
+[`modeling.py`](./modeling.py) is the tiny plain PyTorch model the first two notebooks use. Pass its ops one by one or as a provider.
 
 ```bash
 uv pip install -e ".[fla,liger]" jupyter
-uv run python -m popcorn.bench pull   # the reports dispatch selects on; not in git
 ```

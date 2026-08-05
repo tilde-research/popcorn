@@ -46,7 +46,7 @@ def gated_oja_rule(
     return torch.stack(outs, 1).to(q.dtype)
 
 
-@gated_oja_rule.register("fla", source="fla.ops.gated_oja_rule.chunk_gated_oja_rule")
+@gated_oja_rule.register("fla", source="fla.ops.gated_oja_rule.chunk_gated_oja_rule", forward_only=True)
 def gated_oja_rule_fla(q, k, v, gv, beta, softmax_scale):
     return kernel(q, k, v, gv, beta, scale=softmax_scale)[0]
 

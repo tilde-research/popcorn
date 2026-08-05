@@ -27,6 +27,16 @@ def int8_int2_matmul(a: Int8[Tensor, "rows inner"], b: Int8[Tensor, "inner cols"
 
 # the module source serves both callables: liger packs four ternary weights
 # per byte before its matmul.
-@int8_int2_matmul.register("liger", source="liger_kernel.ops.experimental.mm_int8int2", forward_only=True)
+def _aligned(**arguments):
+    """Every upstream autotune tile requires the inner dimension to be divisible by 512."""
+    return arguments["a"].shape[1] % 512 == 0
+
+
+@int8_int2_matmul.register(
+    "liger",
+    source="liger_kernel.ops.experimental.mm_int8int2",
+    predicate=_aligned,
+    forward_only=True,
+)
 def int8_int2_matmul_liger(a, b):
     return kernel.matmul(a, kernel.pack_weights(b.clone()))

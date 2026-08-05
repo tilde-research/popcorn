@@ -116,7 +116,7 @@ def resolve(path: str) -> Any:
         prefix = f"{prefix}.{segment}"
         try:
             found = getattr(found, segment)
-        except AttributeError:
+        except (AttributeError, RecursionError):
             if not isinstance(found, ModuleType):
                 raise
             # Not yet imported (or genuinely absent): a missing dependency

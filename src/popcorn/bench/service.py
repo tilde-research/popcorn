@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 
 from popcorn.bench.compare import compare_inputs
-from popcorn.bench.grid import cases, make_inputs
+from popcorn.bench.grid import case_plan, make_inputs, smoke_cases
 from popcorn.bench.model import Case, Environment, Record, Result
 from popcorn.bench.store import Store, unmeasured
 from popcorn.core.config import Call, device_name
@@ -23,6 +23,10 @@ if TYPE_CHECKING:
     from popcorn.core.dispatcher import Dispatcher, Implementation
 
 logger = logging.getLogger("popcorn.bench")
+
+# Sentinel reason for a row the harness scheduled but never measured. Rows carrying it are
+# bookkeeping, not evidence, and `merge --scrub-incomplete` removes them from the store.
+INCOMPLETE = "worker did not complete case"
 
 
 def _enabled(name: str) -> bool:
@@ -112,6 +116,11 @@ class BenchmarkService:
                 warmup=warmup,
                 reference_bench=reference_bench,
             )
+        except torch.OutOfMemoryError as error:
+            # Comparison allocates beyond the implementation itself, most of all the float64
+            # ground truth, so a case can exhaust the card outside the sites that name a side.
+            # It is still the shape that did not fit, and it still bounds every larger shape.
+            return Result("oom", f"harness: {error}", grad=backward)
         except Exception as error:
             return Result("error", f"harness: {type(error).__name__}: {error}", grad=backward)
 
@@ -164,7 +173,8 @@ class BenchmarkService:
         trials: int = 10,
         limit: int | None = None,
     ) -> list[Record]:
-        return [self.run_case(backend, case, device, trials) for case in cases(self.op, limit)]
+        planned = smoke_cases(self.op, limit) if limit is not None else case_plan(self.op).flatten()
+        return [self.run_case(backend, case, device, trials) for case in planned]
 
     def run_call(
         self,
@@ -241,7 +251,7 @@ class BenchmarkService:
         backend: str,
         case: Case,
         device: torch.device | str,
-        reason: str = "worker did not complete case",
+        reason: str = INCOMPLETE,
         grad: bool | None = None,
     ) -> Record:
         result = Result("error", reason, grad=not self._registered(backend).forward_only if grad is None else grad)

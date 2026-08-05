@@ -8,8 +8,8 @@
   <a href="https://github.com/tilde-research/popcorn/releases/latest"><img src="https://img.shields.io/github/v/release/tilde-research/popcorn" alt="release"/></a>
   <img src="https://img.shields.io/badge/kernels-96-blue" alt="kernels"/>
   <img src="https://img.shields.io/badge/backends-6-blue" alt="backends"/>
-  <img src="https://img.shields.io/badge/implementations-224-blue" alt="implementations"/>
-  <img src="https://img.shields.io/badge/grid%20rows-31%2C176-blue" alt="grid rows"/>
+  <img src="https://img.shields.io/badge/implementations-223-blue" alt="implementations"/>
+  <img src="https://img.shields.io/badge/grid%20rows-222%2C281-blue" alt="grid rows"/>
 </p>
 <!-- /popcorn:badges -->
 
@@ -40,6 +40,8 @@ Install Popcorn from PyPI using `uv`:
 uv pip install popcorn           # first-party only
 uv pip install "popcorn[liger]"  # + Liger-Kernel backends
 uv pip install "popcorn[fla]"    # + FLA backends
+uv pip install "popcorn[cudnn]"  # + cuDNN attention
+uv pip install "popcorn[transformer_engine]"  # + Transformer Engine softmax
 ```
 
 > [!NOTE]
@@ -89,6 +91,8 @@ Popcorn stands on the shoulders of the open-source kernel ecosystem. The optimiz
 - [Liger-Kernel](https://github.com/linkedin/Liger-Kernel)
 - [quack](https://github.com/Dao-AILab/quack)
 - [flash-attention](https://github.com/Dao-AILab/flash-attention)
+- [NVIDIA cuDNN Frontend](https://github.com/NVIDIA/cudnn-frontend)
+- [NVIDIA Transformer Engine](https://github.com/NVIDIA/TransformerEngine)
 - [Unsloth](https://github.com/unslothai/unsloth)
 
 The agent optimization loop (`python -m popcorn.bench.loop`) is inspired by [AutoKernel](https://github.com/RightNow-AI/autokernel)'s edit–evaluate–keep/revert cycle for autonomous kernel search.

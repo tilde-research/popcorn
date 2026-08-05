@@ -2,9 +2,11 @@
 
 import json
 import os
+import inspect
+import typing
 import warnings
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
@@ -13,8 +15,10 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from popcorn.bench.grid import backward_safe, case_plan
 from popcorn.bench.model import SCHEMA, Record
 from popcorn.core.config import Call
+from popcorn.core.typecheck import matches
 
 try:
     import fcntl
@@ -85,8 +89,8 @@ def unmeasured(record: Record | None, benchmark: bool = True) -> bool:
 
 
 def matching(expected: str | None, recorded: str | None) -> bool:
-    """Fingerprints agree; None on either side (unhashable code, legacy row) matches everything."""
-    return expected is None or recorded is None or expected == recorded
+    """Fingerprints agree; only currently unhashable code may omit its hash."""
+    return expected is None or expected == recorded
 
 
 def prefer(record: Record, current: Record, priority: int = 0, current_priority: int = 0) -> bool:
@@ -130,11 +134,15 @@ def write_parquet(records: Iterable[Record], path: Path) -> None:
 
 def read_file(path: Path | str) -> list[Record]:
     path = Path(path)
-    if not path.exists():
+    try:
+        if path.suffix == PUBLISHED:
+            return read_parquet(path)
+        return [Record.from_dict(json.loads(line)) for line in path.read_text().splitlines() if line]
+    except FileNotFoundError:
+        # Concurrent writers replace report files atomically, and over NFS the old entry
+        # can vanish between an existence check and the read. Absent and just-replaced
+        # answer the same; the replacement serves the next read.
         return []
-    if path.suffix == PUBLISHED:
-        return read_parquet(path)
-    return [Record.from_dict(json.loads(line)) for line in path.read_text().splitlines() if line]
 
 
 def read(directory: Path | str) -> list[Record]:
@@ -149,13 +157,22 @@ def bundled_path(directory: Path, op: str) -> Path:
     return published if published.exists() else directory / f"{op}{SCRATCH}"
 
 
-def audit_records(ops: Iterable[Any], directory: Path = BUNDLED_REPORTS) -> tuple[int, int, dict[str, list[str]]]:
+def _audit_rows(op: str, directory: Path, extra_directories: Iterable[Path]) -> list[Record]:
+    return [record for source in (directory, *extra_directories) for record in read_file(bundled_path(source, op))]
+
+
+def audit_records(
+    ops: Iterable[Any],
+    directory: Path = BUNDLED_REPORTS,
+    extra_directories: Iterable[Path] = (),
+) -> tuple[int, int, dict[str, list[str]]]:
     """Count current and passing implementation pairs, with missing/stale details."""
+    extra_directories = tuple(extra_directories)
     current = 0
     passing = 0
     problems = defaultdict(list)
     for op in ops:
-        rows = read_file(bundled_path(directory, op.name))
+        rows = _audit_rows(op.name, directory, extra_directories)
         for impl in op._impls:
             if impl.name == "torch":
                 continue
@@ -164,8 +181,7 @@ def audit_records(ops: Iterable[Any], directory: Path = BUNDLED_REPORTS) -> tupl
             fresh = [
                 row
                 for row in present
-                if (op.fingerprint is None or row.environment.ref_hash == op.fingerprint)
-                and (impl.fingerprint is None or row.environment.impl_hash == impl.fingerprint)
+                if matching(op.fingerprint, row.environment.ref_hash) and matching(impl.fingerprint, row.environment.impl_hash)
             ]
             if not fresh:
                 kind = "stale" if present else "missing"
@@ -183,6 +199,146 @@ def audit_records(ops: Iterable[Any], directory: Path = BUNDLED_REPORTS) -> tupl
     return current, passing, dict(problems)
 
 
+def _latest_rows(records: Iterable[Record]) -> list[Record]:
+    latest: dict[tuple[Any, ...], Record] = {}
+    for record in records:
+        key = record.key[1:]
+        current = latest.get(key)
+        if current is None or prefer(record, current):
+            latest[key] = record
+    return list(latest.values())
+
+
+def _timed(record: Record) -> bool:
+    return (
+        record.result.status == "pass"
+        and record.result.benchmarked
+        and not record.result.bench_error
+        and isinstance(record.result.bench.get("fwd_ms"), (int, float))
+    )
+
+
+def _dtype_allowed(annotation: Any, dtype: Any) -> bool | None:
+    if dtypes := getattr(annotation, "dtypes", None):
+        return str(dtype).removeprefix("torch.") in dtypes
+    decisions = [_dtype_allowed(child, dtype) for child in typing.get_args(annotation)]
+    known = [decision for decision in decisions if decision is not None]
+    return any(known) if known else None
+
+
+def static_allowed(op: Any, impl: Any, dtype: Any, args: Mapping[str, Any], present: frozenset[str]) -> bool:
+    """Whether static adapter gates admit a case without materializing its tensors."""
+    specs = {spec.param: spec for spec in op.specs}
+    for name, annotation in getattr(impl, "gates", {}).items():
+        if (spec := specs.get(name)) is not None:
+            if spec.optional and name not in present:
+                if not matches(None, annotation):
+                    return False
+                continue
+            if _dtype_allowed(annotation, dtype) is not True:
+                return False
+            continue
+        value = args.get(name, op._signature.parameters[name].default)
+        if value is inspect.Parameter.empty or not matches(value, annotation):
+            return False
+    return True
+
+
+def _series_allowed(op: Any, impl: Any, series: Any) -> bool:
+    """Whether static adapter gates admit every fixed property of a series."""
+    return static_allowed(op, impl, series.dtype, dict(series.args), series.present)
+
+
+def audit_evidence(
+    ops: Iterable[Any],
+    directory: Path = BUNDLED_REPORTS,
+    min_curve_points: int = 2,
+    extra_directories: Iterable[Path] = (),
+) -> tuple[dict[str, int], dict[str, list[str]]]:
+    """Audit timed evidence, named curve depth, and failed benchmark attempts."""
+    if min_curve_points < 1:
+        raise ValueError("min_curve_points must be positive")
+    extra_directories = tuple(extra_directories)
+    counts = Counter(pairs=0, timed=0, curves=0, complete_curves=0)
+    problems: defaultdict[str, list[str]] = defaultdict(list)
+    for op in ops:
+        rows = _audit_rows(op.name, directory, extra_directories)
+        curves = [series for series in case_plan(op).series if series.kind == "curve" and series.cases]
+        for impl in op._impls:
+            if impl.name == "torch":
+                continue
+            counts["pairs"] += 1
+            pair = f"{op.name}:{impl.name}"
+            fresh = _latest_rows(
+                row
+                for row in rows
+                if row.impl == impl.name
+                and matching(op.fingerprint, row.environment.ref_hash)
+                and matching(impl.fingerprint, row.environment.impl_hash)
+            )
+            if not fresh:
+                continue  # missing/stale is reported by audit_records
+            if any(_timed(row) for row in fresh):
+                counts["timed"] += 1
+            else:
+                problems["no_timing"].append(pair)
+
+            benchmark_errors = [row for row in fresh if row.result.bench_error]
+            if benchmark_errors:
+                problems["bench_error"].append(f"{pair} ({len(benchmark_errors)} rows)")
+            bad = Counter(row.result.status for row in fresh if row.result.status in {"fail", "crash", "error"})
+            if bad:
+                details = ", ".join(f"{status}={count}" for status, count in sorted(bad.items()))
+                problems["bad_status"].append(f"{pair} ({details})")
+
+            by_case: defaultdict[tuple[str, bool], list[Record]] = defaultdict(list)
+            for row in fresh:
+                by_case[(row.case_id, row.result.grad)].append(row)
+            for series in curves:
+                if not _series_allowed(op, impl, series):
+                    continue
+                expected = {
+                    case.case_id: by_case[(case.case_id, not impl.forward_only and backward_safe(op, case))]
+                    for case in series.cases
+                }
+                eligible = [
+                    case
+                    for case in series.cases
+                    if not ((case_rows := expected[case.case_id]) and all(row.result.status == "skip" for row in case_rows))
+                ]
+                if len(eligible) < min_curve_points:
+                    # Once every planned point has an explicit row, all-skip points
+                    # describe a gated region, not a missing implementation curve.
+                    attempted = all(expected[case.case_id] for case in series.cases)
+                    if attempted:
+                        continue
+                counts["curves"] += 1
+                timed = sum(any(_timed(row) for row in expected[case.case_id]) for case in eligible)
+                needed = min(min_curve_points, len(eligible))
+                if timed >= needed:
+                    counts["complete_curves"] += 1
+                    continue
+                problems["incomplete_curve"].append(
+                    f"{pair} {series.name} ({timed}/{needed} timed points; {len(series.cases)} planned)"
+                )
+    return dict(counts), dict(problems)
+
+
+def audit_outcomes(directories: Iterable[Path]) -> dict[str, list[str]]:
+    """Report disallowed outcomes in newly generated report directories."""
+    rows = [record for directory in directories for record in read(directory)]
+    problems: defaultdict[str, list[str]] = defaultdict(list)
+    statuses = Counter(
+        (record.op, record.impl, record.result.status) for record in rows if record.result.status in {"fail", "crash", "error"}
+    )
+    for (op, impl, status), count in sorted(statuses.items()):
+        problems["bad_status"].append(f"{op}:{impl} ({status}={count})")
+    errors = Counter((record.op, record.impl) for record in rows if record.result.bench_error)
+    for (op, impl), count in sorted(errors.items()):
+        problems["bench_error"].append(f"{op}:{impl} ({count} rows)")
+    return dict(problems)
+
+
 def _dump(records: list[Record], path: Path, suffix: str) -> None:
     if suffix == PUBLISHED:
         write_parquet(records, path)
@@ -190,11 +346,18 @@ def _dump(records: list[Record], path: Path, suffix: str) -> None:
     path.write_text("\n".join(json.dumps(record.to_dict(), sort_keys=True) for record in records) + "\n")
 
 
+def _preserve_revision(directory: Path) -> None:
+    """Keep local report edits across editable rebuilds until the tracked pin changes."""
+    pin = directory / "REVISION"
+    if pin.exists():
+        (directory / FETCHED).write_text(pin.read_text())
+    else:
+        (directory / FETCHED).unlink(missing_ok=True)
+
+
 def write(records: Iterable[Record], directory: Path | str, suffix: str = SCRATCH) -> None:
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    if suffix == PUBLISHED:
-        (directory / FETCHED).unlink(missing_ok=True)
     grouped = defaultdict(list)
     for record in records:
         grouped[record.op].append(record)
@@ -212,6 +375,38 @@ def write(records: Iterable[Record], directory: Path | str, suffix: str = SCRATC
                 os.replace(temporary, path)
             finally:
                 temporary.unlink(missing_ok=True)
+    if suffix == PUBLISHED:
+        _preserve_revision(directory)
+
+
+def scrub(directory: Path | str, drop: Callable[[Record], bool]) -> int:
+    """Rewrite a reports directory without the rows `drop` selects, returning how many fell.
+
+    `write` can only add or replace rows by key, so removal needs its own path. It exists
+    for rows that are bookkeeping rather than evidence (the harness sentinel that never
+    became a measurement); files left with no rows are removed outright.
+    """
+    directory = Path(directory)
+    dropped = 0
+    for path in [*sorted(directory.glob(f"*{PUBLISHED}")), *sorted(directory.glob(f"*{SCRATCH}"))]:
+        with _locked(path):
+            rows = read_file(path)
+            kept = [row for row in rows if not drop(row)]
+            if len(kept) == len(rows):
+                continue
+            dropped += len(rows) - len(kept)
+            if not kept:
+                path.unlink()
+                continue
+            temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            try:
+                _dump(kept, temporary, path.suffix)
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+    if dropped:
+        _preserve_revision(directory)
+    return dropped
 
 
 class Store:

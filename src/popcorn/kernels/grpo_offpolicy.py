@@ -1,16 +1,23 @@
+import importlib.util
+
 import torch
 from jaxtyping import Float, Float32, Int
 from torch import Tensor
 
 from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
+from popcorn.kernels.grpo import _log_probability
 
 
 # Returns (per-token loss, optional KL, clipping indicator), matching Liger's
 # GrpoLossFunction.
 @register_kernel(
     test_args={"temperature": [0.9], "beta": [0.0, 0.04], "eps_low": [0.2], "eps_high": [0.4]},
-    test_inputs={"completion_mask": lambda t: (t > 0).float()},
+    test_inputs={
+        "old_logp": _log_probability,
+        "ref_logp": _log_probability,
+        "completion_mask": lambda t: (t > 0).float(),
+    },
     tags={Tag.LOSS, Tag.FUSED},
 )
 def grpo_offpolicy(
@@ -49,7 +56,7 @@ def grpo_offpolicy(
     kl = None
     if beta != 0.0:
         delta = upcast(ref_logp).detach() - logp
-        loss_kl = delta.exp() - delta - 1
+        loss_kl = torch.expm1(delta) - delta
         loss = loss + beta * loss_kl
         kl = loss_kl.detach() + logp * 0
 
@@ -63,7 +70,12 @@ def grpo_offpolicy(
     return loss, kl, is_clipped
 
 
-@grpo_offpolicy.register("liger", source="liger_kernel.transformers.grpo_loss.triton_grpo_loss")
+def _has_transformers(**_):
+    """liger's grpo_loss imports transformers at call time and raises without it."""
+    return importlib.util.find_spec("transformers") is not None
+
+
+@grpo_offpolicy.register("liger", source="liger_kernel.transformers.grpo_loss.triton_grpo_loss", predicate=_has_transformers)
 def grpo_offpolicy_liger(
     logits,
     old_logp,

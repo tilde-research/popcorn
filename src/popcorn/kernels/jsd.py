@@ -1,8 +1,11 @@
+import math
+
 import torch
 from jaxtyping import Float
 from torch import Tensor
 
 from popcorn import Tag, kernel, register_kernel
+from popcorn.kernels._utils import upcast
 
 
 def generalized_jsd(log_p, log_q, beta):
@@ -13,8 +16,8 @@ def generalized_jsd(log_p, log_q, beta):
     if beta == 1.0:
         return log_p.exp() * (log_p - log_q)  # KL(student || teacher)
     p, q = log_q.exp(), log_p.exp()
-    m = beta * p + (1 - beta) * q
-    return beta * p * log_q + (1 - beta) * q * log_p - m * torch.log(m)
+    log_m = torch.logaddexp(log_q + math.log(beta), log_p + math.log1p(-beta))
+    return beta * p * (log_q - log_m) + (1 - beta) * q * (log_p - log_m)
 
 
 # log_q is the teacher and treated as a constant, matching liger.
@@ -33,9 +36,9 @@ def jsd(
     $$\mathcal{L} = \frac{1}{T} \sum_t \mathrm{JSD}_\beta(p_t \,\|\, q_t),
     \qquad \mathrm{JSD}_0 = \mathrm{KL}(q \,\|\, p), \quad \mathrm{JSD}_1 = \mathrm{KL}(p \,\|\, q)$$
     """
-    return generalized_jsd(log_p, log_q.detach(), beta).sum() / log_p.shape[0]
+    return generalized_jsd(log_p, log_q.detach(), beta).sum(-1).mean()
 
 
 @jsd.register("liger", source="liger_kernel.transformers.functional.liger_jsd")
 def jsd_liger(log_p, log_q, beta):
-    return kernel(log_p, log_q, beta=beta)
+    return kernel(upcast(log_p), upcast(log_q), beta=beta).to(log_p.dtype)

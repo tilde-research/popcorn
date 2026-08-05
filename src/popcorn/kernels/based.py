@@ -34,7 +34,11 @@ def based(
 
 
 # float16 normalizer gradients land just past tolerance; bf16 and fp32 hold.
-@based.register("fla", source="fla.ops.based.parallel_based")
+def _fla_ready(**arguments):
+    return arguments["q"].shape[-1] <= 128
+
+
+@based.register("fla", source="fla.ops.based.parallel_based", predicate=_fla_ready)
 def based_fla(
     q: Float32[Tensor, "batch seq heads key_dim"] | BFloat16[Tensor, "batch seq heads key_dim"],
     k,

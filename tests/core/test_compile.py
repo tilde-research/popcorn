@@ -7,8 +7,15 @@ import popcorn.compile
 import popcorn.kernels  # noqa: F401  # populates KERNELS
 from popcorn import KERNELS
 from popcorn.compile import PATTERNS, _PopcornPass
+from popcorn.core.sources import available
 
 requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+# Rewrites decline when nothing but the reference could serve the matched call, so
+# asserting one fired needs a backend that can: same skip convention as tests/kernels.
+requires_backend = pytest.mark.skipif(
+    not any(available(name) for name in ("fla", "liger", "quack", "unsloth")),
+    reason="needs an rms_norm backend installed for rewrites to be eligible",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -120,6 +127,7 @@ class HandwrittenRMSNorm(torch.nn.Module):
 
 
 @requires_cuda
+@requires_backend
 class TestCompiledGraphs:
     """Asserts on inductor's generated code, not on match counters: an
     FX-cache hit legitimately skips every pass (the counter never moves), and

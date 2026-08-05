@@ -3,26 +3,23 @@ title: Dispatching
 description: How each call resolves to one implementation
 ---
 
-Each call resolves to one implementation in three steps:
+Dispatch resolves each call in three steps:
 
-1. **Eligibility.** An implementation is a candidate only when its package is installed at a
-   supported version, it has a backward pass if the call needs gradients, and the inputs
-   satisfy its declared shape, dtype, and value constraints.
-2. **Correctness.** Implementations with a recorded failure for this exact case are excluded.
-   Selecting one that has no recorded pass emits `UnvalidatedWarning` once (see
-   [Validation](./validation.md)).
-3. **Speed.** Among the remaining candidates, the fastest wins, judged by the nearest recorded
-   benchmark on the same device, dtype, and gradient mode. The reference competes on equal
-   terms: when it measures fastest, it is selected. Without benchmark data, candidates are
-   tried in registration order, reference last.
+1. **Eligibility.** The package version, gradient support, input constraints, and recorded
+   shape validity must allow the call.
+2. **Correctness.** A recorded failure excludes the implementation. Selecting an
+   implementation without a recorded pass emits `UnvalidatedWarning` once. See
+   [Validation](./validation.md).
+3. **Speed.** The nearest compatible benchmark determines the fastest candidate. Measurements
+   match device, dtype, and gradient mode. The reference is selected when it is fastest.
+   Without benchmark data, registration order applies, with the reference last.
 
-The decision is memoized per call configuration (shapes, dtypes, device, gradient mode, and
-scalar arguments), so dispatch adds negligible overhead in steady state. New validation
-records, benchmarks, or registrations invalidate the memo.
+Decisions are cached by shape, dtype, device, gradient mode, and scalar arguments. New
+validation records, benchmarks, or registrations invalidate the cache.
 
-## Overriding
+## Overrides
 
-Nothing is ever pinned on the kernel; you override selection per call or per scope:
+Select a backend per call or within a context:
 
 ```python
 output = rms_norm(x, weight, backend="fla")   # force this call
@@ -35,21 +32,20 @@ rms_norm.available_backends()                 # ('fla', 'liger', 'quack', 'torch
 print(rms_norm)                               # signature and per-implementation constraints
 ```
 
-A forced implementation never falls back: it raises `DispatchError` when it cannot serve the
-call, whether because its package is missing (the error names the install extra), the inputs
-are unsupported, or the case has a recorded failure (the error carries the recorded reason).
+An explicit backend never falls back. It raises `DispatchError` if the package is missing,
+the inputs are unsupported, or the case has a recorded failure.
+The public API calls this choice a backend; report rows store the same name in the `impl` field.
 
-## Validation flags
+## Runtime validation
 
-Two flags harden dispatch, per call as keyword arguments or process-wide as environment
-variables:
+Use keyword arguments or environment variables to validate during dispatch:
 
 | Per call | Process-wide | Effect |
 | --- | --- | --- |
-| `validate=True` | `POPCORN_VALIDATE=1` | Validate unrecorded cases synchronously before dispatch; only implementations with a recorded pass are selected. |
-| `bench=True` | `POPCORN_BENCH=1` | Additionally record timings and select the exact fastest implementation. Takes precedence over `validate`. |
+| `validate=True` | `POPCORN_VALIDATE=1` | Validate unrecorded cases before selection. |
+| `bench=True` | `POPCORN_BENCH=1` | Validate, time, and select the fastest implementation. This takes precedence over `validate`. |
 
-The keyword flags only enable: a call cannot opt out of a mode set in the environment. Both
-modes run synchronously inside the call, so a first encounter with a new configuration may
-compile and check every candidate before returning. Results land in the user cache,
-`${XDG_CACHE_HOME:-~/.cache}/popcorn` by default, overridden with `POPCORN_CACHE_DIR`.
+Keyword arguments cannot disable a mode set by the environment. Both modes are synchronous,
+so the first call for a configuration may compile and check every candidate. Results are
+stored under `${XDG_CACHE_HOME:-~/.cache}/popcorn` by default. Set `POPCORN_CACHE_DIR` to
+override the location.

@@ -55,7 +55,7 @@ def _no_gqa(**arguments):
 
 # float16 gradients through the two chained passes land just past tolerance;
 # fp32 and bf16 hold.
-@gsa.register("fla", source="fla.ops.gsa.chunk_gsa", predicate=_no_gqa)
+@gsa.register("fla", source="fla.ops.gsa.chunk_gsa", predicate=_no_gqa, forward_only=True)
 def gsa_fla(
     q: Float32[Tensor, "batch seq q_heads key_dim"] | BFloat16[Tensor, "batch seq q_heads key_dim"],
     k,

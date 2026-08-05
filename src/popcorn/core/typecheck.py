@@ -10,6 +10,8 @@ import types
 import typing
 from typing import Any
 
+from jaxtyping import AnnotationError
+
 _UNIONS = (typing.Union, types.UnionType)
 
 
@@ -27,7 +29,16 @@ def matches(value: Any, annotation: Any) -> bool:
     if origin in _UNIONS:
         return any(matches(value, a) for a in typing.get_args(annotation))
     if isinstance(annotation, type):
-        return isinstance(value, annotation)
+        try:
+            return isinstance(value, annotation)
+        except AnnotationError:
+            # Dispatcher._values already validates the full reference shape grammar.
+            # A narrowed jaxtyping gate only needs its dtype when a symbolic axis
+            # (for example response+1) cannot be checked outside @jaxtyped.
+            array_type = getattr(annotation, "array_type", None)
+            dtypes = getattr(annotation, "dtypes", ())
+            dtype = str(getattr(value, "dtype", "")).removeprefix("torch.")
+            return array_type is not None and isinstance(value, array_type) and dtype in dtypes
     return True
 
 

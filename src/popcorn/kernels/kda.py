@@ -43,7 +43,7 @@ def kda(
 
 # 16-bit only: the chunked fp32 accumulation lands just past the harness
 # floor even with ieee matmuls.
-@kda.register("fla", source="fla.ops.kda.chunk_kda")
+@kda.register("fla", source="fla.ops.kda.chunk_kda", forward_only=True)
 def kda_fla(
     q: Float16[Tensor, "batch seq heads key_dim"] | BFloat16[Tensor, "batch seq heads key_dim"],
     k,

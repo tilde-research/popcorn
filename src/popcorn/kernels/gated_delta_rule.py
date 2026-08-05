@@ -41,11 +41,6 @@ def gated_delta_rule(
     return torch.stack(outs, 1).to(q.dtype)
 
 
-@gated_delta_rule.register("fla", source="fla.ops.gated_delta_rule.chunk_gated_delta_rule")
-def gated_delta_rule_fla(q, k, v, g, beta, softmax_scale):
-    return kernel(q, k, v, g, beta, scale=softmax_scale)[0]
-
-
 @gated_delta_rule.register(
     "fla:recurrent", source="fla.ops.gated_delta_rule.fused_recurrent_gated_delta_rule", forward_only=True
 )

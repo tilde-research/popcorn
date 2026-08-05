@@ -11,7 +11,7 @@ from typing import Literal
 
 import pytest
 import torch
-from jaxtyping import Float, Int
+from jaxtyping import Float, Float32, Int
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
 from torch import Tensor
@@ -29,7 +29,7 @@ from popcorn import (
     kernel,
 )
 from popcorn.core.config import call_config, config_id, device_name
-from popcorn.core.fingerprint import fingerprint
+from popcorn.core.fingerprint import _source_modules, fingerprint
 from popcorn.core.typecheck import matches, narrows
 
 comparison = importlib.import_module("popcorn.bench.compare")
@@ -92,6 +92,16 @@ class TestTypecheck:
         assert narrows(bool, int) and not narrows(int, bool)
         assert not narrows(str, bool)
 
+    def test_matches_symbolic_jaxtyping_gate_by_dtype(self):
+        gate = Float32[Tensor, "batch response+1 vocab"]
+        assert matches(torch.zeros(2, 4, 8), gate)
+        assert not matches(torch.zeros(2, 4, 8, dtype=torch.float16), gate)
+
+
+def golden(x):
+    y = x + 1
+    return y * 2
+
 
 class TestFingerprint:
     @staticmethod
@@ -112,6 +122,17 @@ class TestFingerprint:
         assert fingerprint(noisy.f) == fingerprint(clean.f) is not None
         assert fingerprint(clean.f) != fingerprint(changed.f)
         assert fingerprint(len) is None
+
+    def test_digest_is_stable_across_supported_python_versions(self):
+        assert fingerprint(golden) == "61644543e84e"
+
+    def test_first_party_source_hash_does_not_require_importing_it(self):
+        digest = fingerprint(source="popcorn.impls.wall_attn_tl.wall_attn")
+        assert digest is not None and len(digest) == 12
+
+    def test_static_source_hash_follows_package_imports(self):
+        modules = {name for name, _, _ in _source_modules("popcorn.impls.swiglu_cu.swiglu")}
+        assert "popcorn.impls._cuda" in modules
 
     def test_recurses_into_kernel_scoped_dependencies(self, tmp_path, monkeypatch):
         text = "def helper(x):\n    return x {op} 1\n\ndef f(x):\n    return helper(x)\n"
@@ -172,6 +193,8 @@ class TestDispatch:
                         "grad": False,
                         "torch": torch.__version__,
                         "backend_version": None,
+                        "ref_hash": op.fingerprint,
+                        "impl_hash": op["fast"].fingerprint,
                         "ts": "2026-01-01T00:00:00+00:00",
                         "config": {
                             "dims": {"D": n},
@@ -242,6 +265,8 @@ class TestDispatch:
                         "grad": False,
                         "torch": torch.__version__,
                         "backend_version": None,
+                        "ref_hash": op.fingerprint,
+                        "impl_hash": op["fast"].fingerprint,
                         "ts": "2026-01-01T00:00:00+00:00",
                         "config": {
                             "dims": {"D": 4},
@@ -518,6 +543,17 @@ class TestRegistration:
 
         assert emit is logging.handlers.RotatingFileHandler.emit
 
+    def test_source_recovers_from_recursive_package_getattr(self, tmp_path, monkeypatch):
+        package = tmp_path / "recursive_backend"
+        package.mkdir()
+        (package / "__init__.py").write_text(
+            "import sys\n\ndef __getattr__(name):\n    return getattr(sys.modules[__name__], name)\n"
+        )
+        (package / "ops.py").write_text("value = 7\n")
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        assert popcorn.core.sources.resolve("recursive_backend.ops.value") == 7
+
     def test_source_missing_dependency_surfaces(self, tmp_path, monkeypatch):
         (tmp_path / "broken_backend_mod.py").write_text("import missing_dependency_xyz\n")
         monkeypatch.syspath_prepend(str(tmp_path))
@@ -619,7 +655,7 @@ class TestTuning:
         self.cache = store.user_reports()
         self.device = device_name("cpu")
 
-    def _record(self, *rows):
+    def _record(self, op, *rows):
         full = [
             {
                 "schema": 3,
@@ -633,6 +669,8 @@ class TestTuning:
                 "grad": False,
                 "torch": torch.__version__,
                 "backend_version": None,
+                "ref_hash": op.fingerprint,
+                "impl_hash": op[backend].fingerprint,
                 "ts": "2026-01-01T00:00:00+00:00",
                 "config": {"dims": dims, "batch": [1], "dtype": "float32", "args": {"flag": False}, "present": []},
                 "bench": {"fwd_ms": ms, "ref_fwd_ms": ref_ms},
@@ -665,6 +703,8 @@ class TestTuning:
             "grad": call.grad,
             "torch": torch.__version__,
             "backend_version": installed_version(backend),
+            "ref_hash": op.fingerprint,
+            "impl_hash": op[backend].fingerprint,
             "ts": ts,
             "config": call.config,
             "fwd": {},
@@ -682,7 +722,7 @@ class TestTuning:
     def test_picks_winner_of_closest_configuration(self):
         op = make_op()
         op.register("alt")(lambda x, weight, flag: x - 1)
-        self._record(("alt", {"D": 8}, 1.0, 2.0), ("alt", {"D": 1024}, 3.0, 1.0))
+        self._record(op, ("alt", {"D": 8}, 1.0, 2.0), ("alt", {"D": 1024}, 3.0, 1.0))
         assert torch.equal(op(torch.zeros(3, 16)), -torch.ones(3, 16))  # near D=8: alt wins
         assert torch.equal(op(torch.zeros(3, 2048)), torch.ones(3, 2048))  # near D=1024: torch wins
         assert len(op.tuner._selected) == 2
@@ -722,6 +762,7 @@ class TestTuning:
         op.register("fast")(lambda x, weight, flag: x - 1)
         op.register("slow")(lambda x, weight, flag: x - 2)
         self._record(
+            op,
             ("fast", {"D": 4}, 0.1, 1.0),
             ("slow", {"D": 4}, 0.5, 1.0),
         )
@@ -744,6 +785,8 @@ class TestTuning:
                 "grad": False,
                 "torch": torch.__version__,
                 "backend_version": None,
+                "ref_hash": op.fingerprint,
+                "impl_hash": op["alt"].fingerprint,
                 "ts": "2026-01-01T00:00:00+00:00",
                 "config": {
                     "dims": {"D": 4},
@@ -800,7 +843,7 @@ class TestTuning:
     def test_mapped_backend_blocks_outside_region(self):
         op = make_op()
         op.register("alt")(lambda x, weight, flag: x - 1)
-        self._record(("alt", {"D": 8}, 0.1, 1.0), ("alt", {"D": 16}, 0.1, 1.0))
+        self._record(op, ("alt", {"D": 8}, 0.1, 1.0), ("alt", {"D": 16}, 0.1, 1.0))
         assert torch.equal(op(torch.zeros(2, 8)), -torch.ones(2, 8))
         assert torch.equal(op(torch.zeros(2, 4)), torch.ones(2, 4))  # outside fitted region
 
@@ -811,6 +854,7 @@ class TestTuning:
         op.register("b")(lambda x, weight, flag: x - 2)
         op.register("c")(lambda x, weight, flag: x - 3)
         self._record(
+            op,
             ("a", {"D": 8}, 0.5, 1.0),
             ("a", {"D": 16}, 0.5, 1.0),
             ("b", {"D": 8}, 0.2, 1.0),
@@ -1024,7 +1068,12 @@ class TestTuning:
 
         op = make_op()
         op.register("alt")(lambda x, weight, flag: x - 1)
-        self._record(("alt", {"D": 8}, 1.0, 2.0), ("alt", {"D": 16}, 1.0, 2.0), ("alt", {"D": 1024}, 3.0, 1.0))
+        self._record(
+            op,
+            ("alt", {"D": 8}, 1.0, 2.0),
+            ("alt", {"D": 16}, 1.0, 2.0),
+            ("alt", {"D": 1024}, 3.0, 1.0),
+        )
         assert op.tuner.best(device="cpu", grad=False, D=Range(2, 32)).name == "alt"
         assert op.tuner.best(device=self.device, grad=False, D=Range(2, 32)).name == "alt"
         assert op.tuner.best(device=self.device, grad=False, D={1024}).name == "torch"
@@ -1190,6 +1239,7 @@ class TestVersionGate:
         EXCUSED = {
             "unsloth": "cannot resolve against CPU torch (xformers conflict); requires release hardware",
             "fa3": "needs nvcc and a Hopper GPU to build; requires release hardware",
+            "transformer_engine": "its PyTorch extension is CUDA-only; requires release hardware",
         }
         root = Path(__file__).parents[2]
         workflow = (root / ".github" / "workflows" / "ci.yml").read_text()

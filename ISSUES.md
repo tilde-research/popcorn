@@ -112,7 +112,10 @@ uv run python -m popcorn.bench run <op> --backend <backend>
 - Cause: `chunk_linear_attn` raises (not warns) on `seq_len < num_heads`,
   guessing the layout is head-first; short sequences are legitimate
   (flash-linear-attention 0.4.2, `fla/ops/linear_attn/chunk.py`).
-- Marking: predicate skips `seq < heads`.
+  The fused recurrent path also multiplies by `scale` without filling a
+  missing value.
+- Marking: predicate skips `seq < heads`; recurrent calls require an explicit
+  `softmax_scale`.
 
 ## rebased / fla (16-bit gradients)
 
@@ -122,7 +125,7 @@ uv run python -m popcorn.bench run <op> --backend <backend>
   miss bf16 tolerance (flash-linear-attention 0.4.2, `fla/ops/rebased`).
 - Marking: backend gated to float32 inputs.
 
-## gsa / fla (grouped kv heads)
+## gsa / fla (backward is not release-safe)
 
 - Case: any backward with `kv_heads < q_heads`, e.g. `q_heads=4,kv_heads=2,seq=2`
 - Error: `backward: RuntimeError: The size of tensor a (4) must match the size
@@ -131,16 +134,21 @@ uv run python -m popcorn.bench run <op> --backend <backend>
   poisoning the CUDA context.
 - Cause: `chunk_gsa`'s backward does not implement the kv-head grouping its
   forward accepts (flash-linear-attention 0.4.2, `fla/ops/gsa/chunk.py`).
-- Marking: predicate skips grouped kv heads (`kv_heads != heads`).
+  On Torch 2.13 and Triton 3.7.1, even the smallest ungrouped backward did not
+  complete within 180 seconds; its forward passed in 103 seconds.
+- Marking: predicate skips grouped kv heads (`kv_heads != heads`) and the
+  surviving implementation is forward-only.
 
-## kda / fla (fp32 accumulation)
+## kda / fla (dtype and backward restrictions)
 
 - Case: fp32, e.g. `key_dim=64,seq=64,float32`
 - Error: `grad k: err 1.959e-04 > max(2*0.000e+00, 2e-05*8.9)`
 - Cause: the chunked kernel's fp32 accumulation order lands 1.1-1.5x past the
   harness floor even with `TRITON_F32_DEFAULT=ieee`; 16-bit inputs pass
   (flash-linear-attention 0.4.2, `fla/ops/kda`).
-- Marking: backend gated to 16-bit inputs.
+  Under Torch 2.13 and Triton 3.7.1, backward on the minimal fp16 smoke case
+  also triggers an illegal memory access while forward passes.
+- Marking: backend gated to 16-bit inputs and forward-only.
 
 ## mesa_net / fla (approximate solver)
 
@@ -186,7 +194,8 @@ uv run python -m popcorn.bench run <op> --backend <backend>
   but disagrees with fla's own `naive_log_linear_attn` on those inputs
   (`heads=1` matches to 1e-4); its backward also returns grad `q` with `k`'s
   single-head shape (flash-linear-attention 0.4.2, `fla/ops/log_linear_attn`).
-- Marking: learned validity region / dtype gates (was `supports heads={1}`); re-map with `bench map`.
+- Marking: runtime guard enforces the upstream launch contract: one head,
+  `key_dim` divisible by 64, and power-of-two `value_dim`.
 
 ## ttt / fla (backward accuracy)
 
@@ -253,15 +262,16 @@ uv run python -m popcorn.bench run <op> --backend <backend>
   torch preserves (liger-kernel 0.6.4, `liger_kernel/ops/poly_norm.py`).
 - Marking: learned validity region (was `supports` Range starting at 3); re-map with `bench map`.
 
-## comba / fla (fp16 gradients)
+## comba / fla (backward unsafe)
 
-- Case: fp16, e.g. `seq=33,float16`
-- Error: `grad k: err 9.387e-03 > max(2*2.620e-03, 1e-03*9.2)`, with `grad v`
-  and `grad p` marginal in the same cases
-- Cause: the chunked backward accumulates the delta correction through the
-  auxiliary key `p` in half precision, losing ~3x more than the fp16 budget
-  (flash-linear-attention 0.4.2, `fla/ops/comba/chunk.py`).
-- Marking: backend gated to `Float32 | BFloat16`.
+- Case: chunked backward, including
+  `batch=8,heads=2,key_dim=32,seq=65,value_dim=16,bfloat16`.
+- Error: `CUDA error: an illegal memory access was encountered`. Earlier fp16
+  cases also exceeded the gradient tolerance without crashing.
+- Cause: flash-linear-attention 0.4.2's chunked backward writes out of bounds
+  on valid layouts under Torch 2.13 and Triton 3.7.1.
+- Marking: both FLA implementations are forward-only. The recurrent path was
+  already forward-only; the chunked path is now marked the same.
 
 ## gated_delta_product / fla (fp16 outputs)
 
@@ -303,7 +313,8 @@ uv run python -m popcorn.bench run <op> --backend <backend>
   in the compression/selection kernels plus the gated blend) lands just past
   the harness budget on both stacks; bf16 passes everywhere, so it is dtype
   noise rather than gradient math.
-- Marking: both backends gated to bfloat16.
+- Marking: both backends are gated to bfloat16 and reject launch groups where
+  `q_heads / kv_heads` is not a multiple of 16.
 
 ## nsa upstream (tilde-research/nsa-release), fixed in the vendored copy
 
@@ -370,6 +381,144 @@ composition with these upstream bugs fixed (details in the file header):
 - Marking: none — the fail rows stay in the report, so tuned dispatch never
   routes those cases to `fla:recurrent`, and dispatch-time validation blocks
   it elsewhere. Worth an upstream report.
+
+## gated_delta_rule / fla (chunk path does not compile in budget)
+
+- Case: the smallest valid forward,
+  `batch=1,heads=1,key_dim=16,seq=2,value_dim=16,float32`.
+- Error: the chunk kernel does not complete compilation within 150 seconds;
+  the isolated 300-second smoke watchdog also expired.
+- Cause: flash-linear-attention 0.4.2's chunk path does not compile to a usable
+  kernel under Torch 2.13 and Triton 3.7.1.
+- Marking: the chunk adapter is removed. The independently verified recurrent
+  forward path remains registered.
+
+## gated_oja_rule / fla (chunk backward does not compile in budget)
+
+- Case: the smallest valid case,
+  `batch=1,heads=1,key_dim=16,seq=2,value_dim=16,float32`.
+- Error: forward passes in 99 seconds, while backward exceeds both the
+  180-second focused probe and the isolated 300-second smoke watchdog.
+- Cause: the upstream chunk backward does not produce a runnable kernel on
+  Torch 2.13 and Triton 3.7.1.
+- Marking: chunk and recurrent implementations are forward-only.
+
+## rwkv7 / fla (float32 unsupported on the upgraded stack)
+
+- Case: the smallest fp32 smoke case.
+- Error: upstream warns that `ChunkDeltaRuleFunction` does not support float32
+  and does not finish within the smoke watchdog.
+- Cause: RWKV-7 lowers through flash-linear-attention's generalized delta-rule
+  chunk path, whose current fp32 specialization is unsupported.
+- Marking: the adapter is gated to bfloat16; its bfloat16 forward/backward
+  smoke passes.
+
+## deltaformer / fla (undeclared FlashAttention-2 dependency)
+
+- Case: every call in the isolated FLA environment.
+- Error: the adapter is skipped because `flash_attn` is absent; forcing the
+  upstream function fails when its second stage imports FlashAttention-2.
+- Cause: `fla.ops.deltaformer.deltaformer_attn` depends on FlashAttention-2,
+  but flash-linear-attention does not declare it and Popcorn's `fla` extra
+  cannot promise a compatible source build for every supported torch/CUDA
+  pair.
+- Marking: the adapter is removed rather than making isolated FLA correctness
+  depend on an undeclared source build. The torch reference remains available.
+
+## rms_norm / liger (DTensor check assumes an import someone else did)
+
+- Case: every liger `rms_norm` call in a minimal environment.
+- Error: `AttributeError: module 'torch.distributed' has no attribute 'tensor'`
+- Cause: liger 0.7.0's kernel guard runs
+  `isinstance(X, torch.distributed.tensor.DTensor)` without importing
+  `torch.distributed.tensor`; the attribute only exists after something else
+  (typically transformers) imports that submodule, so environments with bare
+  torch expose the bug.
+- Marking: none. `popcorn.kernels.rms_norm` imports the submodule at module
+  load, which keeps liger's check working everywhere.
+
+## grpo_offpolicy / liger (grpo_loss requires transformers)
+
+- Case: every liger `grpo_offpolicy` call without transformers installed.
+- Error: `ImportError: The attribute 'grpo_loss' requires the 'transformers'
+  library` at call time; liger-kernel declares no runtime dependency on it.
+- Marking: the adapter's predicate skips liger when transformers is absent, so
+  dispatch falls back cleanly. The sweep's typed liger phase installs
+  transformers to measure the path.
+
+## linear_cross_entropy / quack (no dtype round-trips in 0.5.0)
+
+- Case: every scheduled quack `linear_cross_entropy` case.
+- Error: `TypeError: a_dtype should be float16 or float8` for fp32 inputs; fp16
+  inputs run but return an fp32 loss, which breaks the op's same-dtype return.
+- Cause: quack 0.5.0's `chunked_linear_cross_entropy` gemm accepts only
+  fp16/fp8 activations while the loss is always fp32. Earlier releases took
+  fp32 activations, which is what the adapter was written against.
+- Marking: the adapter is removed rather than narrowed, since no annotation
+  satisfies both constraints and adapters do not cast outputs. Restore it if a
+  quack release accepts fp32 again or returns the input dtype.
+
+## linear_jsd / liger (non-finite valid inputs in 0.7.0)
+
+- Case: ordinary finite inputs at model widths, including
+  `hidden=4096,teacher_hidden=3072,tokens=1448,vocab=129,bfloat16`.
+- Error: non-finite loss, student gradient, and student-weight gradient.
+- Cause: the fused path forms logits before its fp32 cast, then exponentiates
+  log-probabilities before mixing them. Large but finite logit ranges can
+  therefore overflow the projection or underflow both probabilities to zero.
+- Marking: the adapter is removed because no dtype or shape annotation
+  guarantees its value-dependent numerical contract. Restore it when upstream
+  computes the projection and mixture stably.
+
+## log_linear_attn, linear_attn / fla (hard crashes that poison the worker)
+
+- Case: grid rows crash the worker process outright (segfault, no Python
+  traceback), concentrated in `log_linear_attn` and `linear_attn`.
+- Error: the crashing case records `crash`; before the sweep recycled poisoned
+  workers, the cases that followed recorded
+  `inputs: AcceleratorError: CUDA error: an illegal memory access was encountered`.
+- Cause: fla Triton kernels write out of bounds on some shapes. CUDA surfaces
+  the fault asynchronously at the next sync point and never recovers the
+  context, so every later kernel launch in that process fails too.
+- Marking: none. `crash` rows are honest per-case evidence and dispatch never
+  routes to an implementation without a passing row. The sweep worker exits
+  after recording any row whose reason carries an unrecoverable CUDA mark
+  (`scripts/bench_sweep.py POISON_MARKS`), so the supervisor restarts it with a
+  clean context and one bad case can no longer contaminate its neighbors.
+
+## wall_attn, nsa / popcorn (first-party kernels that build on fla)
+
+- Case: the isolated `popcorn` sweep phase recorded only `skip` rows for these
+  impls; every other eligible first-party impl measured normally.
+- Cause: `popcorn.impls.wall_attn_tl` and `popcorn.impls.nsa_tl` are adapted
+  from fla and import its utility ops, so their predicates decline whenever
+  fla is absent. The phase installed bare `.` without the fla extra.
+- Marking: the typed popcorn phase installs `.[fla]` now
+  (`popcorn.bench.sweep.PhaseSpec`). `nsa:popcorn` keeps its valid rows; `wall_attn:popcorn` has
+  none since the reference's stable-form rewrite and needs one re-measurement
+  before dispatch will route to it.
+
+## attn, attn_varlen / fa3 (rows predate the current references)
+
+- Case: `attn:fa3` and `attn_varlen:fa3` have no passing row at the current
+  reference fingerprints; their passes predate the reference cleanups.
+- Cause: flash-attn-3 compiles against torch's CUDA at install time and the
+  benchmark cluster's nvcc is older than torch 2.11's CUDA runtime, so the
+  sweep's fa3 phase preflight-skips and the rows cannot be refreshed there.
+- Marking: none. The pairs stay registered and dispatch falls back to
+  implementations with current evidence; re-measure on a machine whose nvcc
+  matches torch's CUDA to restore them.
+
+## attn / cudnn (hosts exposing two CUDA runtime majors)
+
+- Case: Torch 2.13's CUDA 13 wheel on a host that also exposes
+  `/usr/local/cuda/.../libcudart.so.12`.
+- Error: `Multiple libcudart libraries found: libcudart.so.12 and libcudart.so.13`.
+- Cause: cuDNN Frontend 1.22 probes both runtime majors with `dlopen` and aborts
+  when both resolve, even though Torch and cuDNN are consistently CUDA 13.
+- Marking: no fallback or repository loader hack. The sweep runs a direct
+  forward/backward preflight and skips `cudnn` on a mixed-runtime host. Use a
+  CUDA 13-only image to benchmark and publish this backend.
 
 # Deferred ops
 

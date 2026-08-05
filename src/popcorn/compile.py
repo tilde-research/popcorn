@@ -105,7 +105,7 @@ def _variants(op: Dispatcher, dtypes: frozenset[torch.dtype]) -> list[Case]:
     # The grid samples `...` as a single extent; force (2, 3) only for tracing.
     batch = (2, 3) if any(... in spec.tokens for spec in op.specs) else ()
     best: dict[Any, Case] = {}
-    for case in grid.cases(op, limit=MAX_TRACE_GRID):
+    for case in grid.sample_cases(op, limit=MAX_TRACE_GRID):
         if case.dtype not in dtypes:
             continue
         case = Case(case.dims, batch, case.dtype, case.args, case.present)

@@ -3,8 +3,8 @@ title: Tuning
 description: Select one implementation for a region of shapes
 ---
 
-Ordinary dispatch tunes each call automatically from the nearest compatible benchmark. To
-select one implementation for a broader region, query the recorded data explicitly:
+Normal dispatch selects an implementation from the nearest compatible benchmark. Use the
+tuner to select one implementation for a broader region:
 
 ```python
 from popcorn import Range
@@ -18,5 +18,5 @@ best = rms_norm.tuner.best(
 output = best(x, weight)
 ```
 
-`best` returns the implementation with the lowest median recorded latency across the region.
-It only reads existing benchmark data; it never runs benchmarks itself.
+`best` returns the implementation with the lowest median recorded latency in the region. It
+reads existing data and does not run benchmarks.

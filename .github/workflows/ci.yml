@@ -54,7 +54,8 @@ jobs:
 
   kernels:
     # The matrix verifies registration and package isolation on CPU. Numerical smoke is
-    # CUDA-gated; fa3 and unsloth run only on release hardware.
+    # CUDA-gated; fa3, transformer_engine, and unsloth need CUDA torch and run only on
+    # release hardware.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -62,6 +63,10 @@ jobs:
         include:
           - backend: none
             target: "."
+          - backend: popcorn
+            target: ".[fla]"
+          - backend: cudnn
+            target: ".[cudnn]"
           - backend: fla
             target: ".[fla]"
           - backend: liger
@@ -75,7 +80,14 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv venv --clear
-      - run: uv pip install --torch-backend=cpu -e "${{ matrix.target }}" --group dev
+      - shell: bash
+        run: |
+          support=()
+          # Liger's GRPO adapter imports transformers without declaring it.
+          if [ "${{ matrix.backend }}" = "liger" ]; then
+            support=("transformers>=4.52.0,<5")
+          fi
+          uv pip install --torch-backend=cpu -e "${{ matrix.target }}" --group dev "${support[@]}"
         env:
           POPCORN_SKIP_REPORTS: "1"
       - run: uv run --no-sync pytest tests/kernels -q
@@ -114,6 +126,39 @@ jobs:
       # Keep the pin synchronized with the current registry and fingerprints. Passing
       # validation is a stricter release-hardware gate (`check_records.py --require-pass`).
       - run: uv run --no-sync python scripts/check_records.py
+
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: uv venv --clear
+      - run: uv pip install --torch-backend=cpu -e . --group dev
+        env:
+          POPCORN_SKIP_REPORTS: "1"
+      - run: uv run --no-sync pytest tests/core/test_site.py -q
+      # Empty local reports are a deterministic build fixture; exporter contract tests
+      # cover joins against actual rows.
+      - run: uv run --no-sync python scripts/update_site.py
+        env:
+          POPCORN_SKIP_REPORTS: "1"
+      - run: npm ci
+        working-directory: site
+      - run: npm test
+        working-directory: site
+      - run: npm run types:check
+        working-directory: site
+      - run: npm run build
+        working-directory: site
+        env:
+          NEXT_PUBLIC_BASE_PATH: /popcorn
 
   build:
     runs-on: ubuntu-latest

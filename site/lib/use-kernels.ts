@@ -10,7 +10,10 @@ function load(name: string): Promise<Kernel> {
   const running = pending.get(name);
   if (running) return running;
   const promise = fetch(`${basePath}/data/${name}.json`)
-    .then((response) => response.json() as Promise<Kernel>)
+    .then((response) => {
+      if (!response.ok) throw new Error(`${name}: ${response.status} ${response.statusText}`);
+      return response.json() as Promise<Kernel>;
+    })
     .then((kernel) => {
       cache.set(name, kernel);
       return kernel;
@@ -20,19 +23,26 @@ function load(name: string): Promise<Kernel> {
   return promise;
 }
 
-/** Fetch-and-cache kernel data; returns the loaded subset, in request order. */
-export function useKernels(names: string[]): Kernel[] {
+/** Fetch-and-cache one complete requested set, preserving request order. */
+export function useKernels(names: string[]): { kernels: Kernel[]; loading: boolean; error: string | null } {
   const [, bump] = useState(0);
+  const [error, setError] = useState<string | null>(null);
   const missing = names.filter((name) => !cache.has(name));
+  const key = names.join(',');
 
   useEffect(() => {
+    setError(null);
     if (missing.length === 0) return;
     let alive = true;
-    void Promise.all(missing.map(load)).then(() => alive && bump((n) => n + 1));
+    void Promise.all(missing.map(load))
+      .then(() => alive && bump((n) => n + 1))
+      .catch((reason: unknown) => alive && setError(reason instanceof Error ? reason.message : String(reason)));
     return () => {
       alive = false;
     };
-  }, [missing.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return names.map((name) => cache.get(name)).filter((kernel): kernel is Kernel => kernel !== undefined);
+  const kernels = names.map((name) => cache.get(name)).filter((kernel): kernel is Kernel => kernel !== undefined);
+  const loading = kernels.length !== names.length && error === null;
+  return { kernels: loading ? [] : kernels, loading, error };
 }

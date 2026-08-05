@@ -50,7 +50,7 @@ The suite is three tiers, one directory each, and CI runs them as separate jobs:
 | tier | what it covers | how CI runs it |
 |---|---|---|
 | `tests/core` | everything that is not a kernel adapter: dispatch, policy, store, hub, CLI, `popcorn.compile` | once, no backend installed |
-| `tests/kernels` | registration conventions and a per-kernel smoke slice | once per backend, each alone in its environment |
+| `tests/kernels` | registration conventions and a bounded per-kernel smoke slice | once per backend, each alone in its environment |
 | `tests/integration` | what needs two backends at once | once, with `fla` and `liger` together |
 
 Backends pin mutually exclusive requirements and some patch torch on import, so a single environment holding
@@ -74,9 +74,10 @@ With the [Ruff extension](https://marketplace.visualstudio.com/items?itemName=ch
 
 Backend extras (`fla`, `liger`, ...) are declared in [pyproject.toml](pyproject.toml); install the ones you work on with `uv sync --extra fla`. Verifying backends ([5. Verify](#5-verify)) needs a CUDA machine; everything else runs on CPU.
 
-Two extras cannot be installed as casually as the rest. `unsloth` does not resolve against CPU torch, so it
-needs a CUDA torch build. `fa3` is source-only: FlashAttention-3 publishes nothing to PyPI, lives in the
-`hopper/` subdirectory of the flash-attention repository, and imports torch in its own `setup.py`.
+Three extras need a CUDA torch environment. `unsloth` does not resolve against CPU torch,
+`transformer_engine` builds its PyTorch extension for the installed CUDA runtime, and `fa3` is source-only:
+FlashAttention-3 publishes nothing to PyPI, lives in the `hopper/` subdirectory of the flash-attention
+repository, and imports torch in its own `setup.py`.
 [pyproject.toml](pyproject.toml) points `flash-attn-3` at a pinned commit and turns build isolation off for it,
 which makes it the one extra that cannot come from a bare `uv sync` — the build reads the environment, so torch
 and the build tools have to be installed first:
@@ -89,6 +90,9 @@ uv sync --extra fa3          # needs nvcc, a Hopper GPU, and tens of minutes of 
 
 A downstream consumer needs the same two stanzas in their own `pyproject.toml`, because PyPI rejects direct git
 references in published metadata. This is why `fa3` is absent from the CI matrix rather than merely slow there.
+The `cudnn` extra uses Torch's CUDA 13 runtime; cuDNN Frontend 1.22 rejects hosts that expose both CUDA 12 and
+CUDA 13 runtimes, so benchmark it in a CUDA 13-only image. The sweep preflights this and skips the phase rather
+than recording a grid of loader crashes.
 
 > [!NOTE]
 > → Adding a backend to an existing op: [1. Support an existing kernel](#1-support-an-existing-kernel)
@@ -261,7 +265,7 @@ uv run python -m popcorn.bench submit [ops...] [--array 8] [--reps 10] [--limit 
 uv run python -m popcorn.bench view [--user] [--out index.html]
 ```
 
-`scripts/bench_hardware.py` wraps `run` for the common case: the full grid for every op on the current machine, then a README badge regen. `scripts/update_readme.py` regenerates the badges without running anything.
+`scripts/bench_hardware.py` wraps `run` for the common case: the shared case plan for every op on the current machine. `scripts/update_readme.py` regenerates the badges without running anything.
 
 To compare an unregistered callable first:
 
@@ -273,20 +277,36 @@ result = compare(mine, reference, {"x": x, "weight": weight})
 
 `compare` consumes concrete named inputs, checks forward and backward against fp64 truth, then times both callables. It owns no registry or persistence.
 
-`run` executes the op's full grid (shapes x args x dtypes x batch ranks x optional-tensor presence), forward and backward. Correctness is completed before timing; a timing failure is recorded separately and never overwrites a correctness pass. `--reps` controls seeded comparisons and timed repetitions; `--limit` takes one deterministic per-op sample shared by every backend; `--shard I/K` selects one contiguous slice. Rows atomically upsert into `src/popcorn/reports/<op>.parquet` by exact case, gradient requirement, hardware, Torch version, and backend version. `run` and `merge` regenerate the README badges automatically.
+`run` executes the shared case plan: pairwise coverage plus named one-axis production and long-context curves, in forward or backward mode as required by each backend. Correctness is completed before timing; a timing failure is recorded separately and never overwrites a correctness pass. `--reps` controls seeded comparisons and timed repetitions; `--limit` switches to one deterministic random sample per op shared by every backend; `--shard I/K` selects one contiguous slice. Rows atomically upsert into `src/popcorn/reports/<op>.parquet` by exact case, gradient requirement, hardware, Torch version, and backend version. `run` and `merge` regenerate the README badges automatically.
 
-`fill` is the bounded database-expansion path. Its pairwise covering array includes every value from
-`core/dims.py` and every two-axis interaction without materializing the hundreds of millions of cases in the
-full product. OOM pruning schedules no inferred rows: the observed OOM remains evidence, while dominated cases
-are simply left unmeasured. Run each backend in its isolated environment so package collisions cannot affect
-the records.
+`fill` is the bounded database-expansion path. Pairwise coverage includes every value from
+`core/dims.py` and every two-axis interaction without materializing the full product. Named curves vary
+one axis under fixed production or long-context settings. Full-model temporal curves stop at 32K;
+reduced-shape frontier curves overlap from 8K and continue through 1M. A case that exhausts a budget prunes the cases
+above it: memory and runtime both grow with the shape, so an observed OOM or timeout rules out every case
+no smaller in each dimension of the same stratum.
+A crash does not prune, being as likely a tile-boundary bug as a limit. Pruning schedules no inferred rows:
+the observation remains the only evidence, and dominated cases are simply left unmeasured. Run each backend
+in its isolated environment so package collisions cannot affect the records.
 
-For the complete H100 database sweep, use `uv run python scripts/bench_sweep.py submit --watch`. It owns one
-exclusive 10-node allocation, records references first, then wipes and reinstalls one isolated environment for
-each backend in a fixed sequence. Its planner balances OOM strata across 80 workers while keeping compile
-affinity where possible. Partial rows and progress survive interruption; resume with
-`uv run python scripts/bench_sweep.py resume logs/sweeps/<run> --watch`. Exact reference timings are reused
-across phases, but reference correctness still runs for every implementation. The sweep never publishes.
+For the complete H100 database sweep, use `uv run python scripts/bench_sweep.py submit --nodes 6 --watch`.
+`--nodes` defaults to 6 and cannot exceed 6. The command queues one exclusive singleton-named submitit job
+with eight GPU workers per node, records references first, then wipes and reinstalls one isolated environment
+for each backend in a fixed sequence. It skips `fa3` with a message when `nvcc` cannot compile against torch's
+CUDA. The shared case plan combines sparse pairwise coverage with named production and long-context curves,
+drops cases whose inputs alone exceed device memory, and runs each stratum cheapest first so frontiers meet
+their boundary before paying for what lies beyond it. Static adapter gates remove impossible dtype and scalar
+cases from both backend and reference work. Workers run cases in process: a crash costs one case (a
+sentinel converts it to a `crash` row on restart) and a hang one watchdog budget (`timeout`).
+References cap that budget at 60 seconds; backend budgets retain the configured compile floor and may
+grow with input size.
+The sweep records fp16 frontier cases forward-only when backward would reduce more than 32K positions into a
+broadcast input, since that accumulated gradient cannot be represented in fp16.
+Near walltime the job drains, merges, and resubmits itself; planning is idempotent, so any attempt skips finished work,
+and `uv run python scripts/bench_sweep.py resume [logs/sweeps/<run>] --watch` is the same operation by hand. Exact
+reference timings are reused across phases, but reference correctness still runs for every implementation.
+The sweep never publishes. `merge --scrub-incomplete` drops rows the harness scheduled but never measured.
+For a targeted release fill, add `--curves-only`; cached curve rows are still skipped.
 
 Before any case runs, `run` and `map` pin the target: a bare `--device cuda` resolves to the current index (`cuda:0`), a CUDA request with no visible GPU is an error rather than a silent CPU run, and the resolved device name is printed. Hardware is stamped from that live device, so pass `--hardware H100` to abort when the machine you landed on is not the one you meant to record. `submit` forwards the gate to every array task.
 
@@ -299,6 +319,7 @@ Before any case runs, `run` and `map` pin the target: a bare `--device cuda` res
 | fail | numeric divergence | fix the adapter mapping, or narrow gates |
 | crash | the implementation raised during correctness | see the reason column |
 | oom | out of memory (censored; caps the fitted region) | shrink pools or accept the cap |
+| timeout | the case exceeded its watchdog budget | inspect the frontier or raise `--timeout` |
 | error | harness or worker failure, correctness unknown | fix the harness or rerun |
 
 A successful row may also have `bench_error`; correctness remains valid, but the timing must be rerun. In the detail matrix printed by `scripts/update_readme.py`, ✔ means every tested case passes, ✔* means at least one passes while another is gated, failed, or unverified, and ✘ means no case passes.

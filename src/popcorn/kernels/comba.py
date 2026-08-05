@@ -48,8 +48,8 @@ def comba(
     return torch.stack(outs, 1).to(q.dtype)
 
 
-# fp16 gradients land just past tolerance (see ISSUES.md).
-@comba.register("fla", source="fla.ops.comba.chunk_comba")
+# The upstream backward can write out of bounds; both forward paths remain valid.
+@comba.register("fla", source="fla.ops.comba.chunk_comba", forward_only=True)
 def comba_fla(
     q: Float32[Tensor, "batch seq heads key_dim"] | BFloat16[Tensor, "batch seq heads key_dim"],
     k,

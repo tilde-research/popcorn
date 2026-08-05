@@ -5,6 +5,7 @@ from jaxtyping import Float, Float32
 from torch import Tensor
 
 from popcorn import Tag, kernel, register_kernel
+from popcorn.kernels._utils import upcast
 
 
 # The target branch is a constant, matching fla.
@@ -23,9 +24,9 @@ def linear_kl_div(
 
     [Liger Kernel (Hsu et al., 2024)](https://arxiv.org/abs/2410.10989)
     """
-    log_p = F.linear(x, weight).log_softmax(-1)
-    log_q = F.linear(target_x, target_weight).log_softmax(-1).detach()
-    return (log_q.exp() * (log_q - log_p)).sum() / x.shape[0]
+    log_p = F.linear(upcast(x), upcast(weight)).log_softmax(-1)
+    log_q = F.linear(upcast(target_x), upcast(target_weight)).log_softmax(-1).detach()
+    return (log_q.exp() * (log_q - log_p)).sum(-1).mean()
 
 
 # fla always returns the loss in fp32, so only float32 inputs round-trip.

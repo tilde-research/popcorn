@@ -5,6 +5,7 @@ from jaxtyping import Float, Float32, Int
 from torch import Tensor
 
 from popcorn import Tag, kernel, register_kernel
+from popcorn.kernels._utils import upcast
 
 
 @register_kernel(test_args={"label_smoothing": [0.0, 0.1]}, tags={Tag.LOSS, Tag.LINEAR, Tag.FUSED})
@@ -23,8 +24,9 @@ def linear_cross_entropy(
 
     [Cut Cross-Entropy (Wijmans et al., 2024)](https://arxiv.org/abs/2411.09009)
     """
+    logits = F.linear(upcast(x), upcast(weight), None if bias is None else upcast(bias))
     return F.cross_entropy(
-        F.linear(x, weight, bias),
+        logits,
         labels,
         ignore_index=ignore_index,
         label_smoothing=label_smoothing,
@@ -64,26 +66,6 @@ def linear_cross_entropy_liger(
     )
 
 
-def _aligned(**arguments):
-    """The chunked kernel asserts tokens % 8 == 0."""
-    return arguments["x"].shape[0] % 8 == 0
-
-
-# forward_only: quack returns the loss in fp32 (so only float32 inputs
-# round-trip) while its backward gemm accepts only fp16/fp8 activations.
-@linear_cross_entropy.register(
-    "quack",
-    source="quack.linear_cross_entropy.chunked_linear_cross_entropy",
-    predicate=_aligned,
-    forward_only=True,
-)
-def linear_cross_entropy_quack(
-    x: Float32[Tensor, "tokens hidden"],
-    weight,
-    labels,
-    bias: Literal[None],
-    ignore_index,
-    label_smoothing: Literal[0.0],
-    reduction,
-):
-    return kernel(x, weight, labels, ignore_index=ignore_index, reduction=reduction)
+# quack 0.5.0 cannot serve this op: its gemm accepts only fp16/fp8 activations while the
+# loss always returns fp32, so no input dtype round-trips (see ISSUES.md). Earlier quack
+# releases took fp32 and were adapted here; restore an adapter if a release aligns again.

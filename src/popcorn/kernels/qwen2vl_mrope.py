@@ -15,8 +15,8 @@ def _table(f):
     return lambda t: f(t).chunk(2, -1)[0].repeat(1, 1, 1, 2)
 
 
-# mrope_section must sum to head_dim / 2; singleton test pools keep the grid
-# consistent. cos/sin are constants, matching liger.
+# mrope_section must sum to head_dim / 2; the grid re-splits it 2:1:1 per head size
+# (bench.grid._repair). cos/sin are constants, matching liger.
 @register_kernel(
     test_args={"mrope_section": [[8, 4, 4]]},
     test_inputs={"cos": _table(torch.cos), "sin": _table(torch.sin)},

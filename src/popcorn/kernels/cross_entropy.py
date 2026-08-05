@@ -5,6 +5,7 @@ from jaxtyping import Float, Float32, Int
 from torch import Tensor
 
 from popcorn import Tag, kernel, register_kernel
+from popcorn.kernels._utils import upcast
 
 
 @register_kernel(test_args={"label_smoothing": [0.0, 0.1]}, tags={Tag.LOSS})
@@ -19,7 +20,13 @@ def cross_entropy(
 
     $$\mathcal{L}_t = -\log \operatorname{softmax}(x_t)_{y_t}$$
     """
-    return F.cross_entropy(logits, labels, ignore_index=ignore_index, label_smoothing=label_smoothing, reduction=reduction)
+    return F.cross_entropy(
+        upcast(logits),
+        labels,
+        ignore_index=ignore_index,
+        label_smoothing=label_smoothing,
+        reduction=reduction,
+    )
 
 
 # fla returns unreduced (losses, z_losses) in fp32; z_losses are zero unless
@@ -33,11 +40,11 @@ def cross_entropy_fla(
 
 @cross_entropy.register("liger", source="liger_kernel.transformers.functional.liger_cross_entropy")
 def cross_entropy_liger(logits, labels, ignore_index, label_smoothing, reduction):
-    return kernel(logits, labels, ignore_index=ignore_index, label_smoothing=label_smoothing, reduction=reduction)
+    return kernel(logits, labels, ignore_index=ignore_index, label_smoothing=label_smoothing, reduction=reduction).float()
 
 
 # quack supports unsmoothed loss only and returns fp32, so only float32 inputs round-trip.
-@cross_entropy.register("quack", source="quack.cross_entropy.cross_entropy")
+@cross_entropy.register("quack", source="quack.cross_entropy")
 def cross_entropy_quack(
     logits: Float32[Tensor, "tokens vocab"], labels, ignore_index, label_smoothing: Literal[0.0], reduction
 ):

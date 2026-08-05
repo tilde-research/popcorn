@@ -26,7 +26,7 @@ from typing import Any
 import popcorn.kernels  # noqa: F401
 from popcorn import KERNELS
 from popcorn.bench.compare import compare_inputs
-from popcorn.bench.grid import cases, make_inputs
+from popcorn.bench.grid import make_inputs, sample_cases
 from popcorn.bench.model import Case, Record
 from popcorn.bench.store import Store, user_reports
 from popcorn.core.config import device_name
@@ -216,7 +216,7 @@ def cmd_try(args: argparse.Namespace) -> None:
     op = _op(args.op)
     impl, candidate = _candidate(args.op, args.impl)
     grad = not args.forward_only
-    sample = cases(op, args.cases)
+    sample = sample_cases(op, args.sample)
     if not sample:
         raise SystemExit(f"{op.name}: empty case grid")
     device = device_name(args.device)
@@ -356,7 +356,14 @@ def main() -> None:
     trial = sub.add_parser("try", help="evaluate one candidate on a fixed case sample; exit 0 = keep, 1 = revert")
     trial.add_argument("op")
     trial.add_argument("--impl", help="dotted path to the candidate (default: popcorn.impls.<op>_tl.<op>, then _cu)")
-    trial.add_argument("--cases", type=_positive, default=4, help="deterministic sample size (stable across runs)")
+    trial.add_argument(
+        "--sample",
+        "--cases",
+        dest="sample",
+        type=_positive,
+        default=4,
+        help="deterministic random Cartesian sample size (stable across runs; --cases is deprecated)",
+    )
     trial.add_argument("--reps", type=_positive, default=5, help="seeded correctness draws and timing reps")
     trial.add_argument("--device", default="cuda")
     trial.add_argument("--forward-only", action="store_true", help="skip backward grading and timing")

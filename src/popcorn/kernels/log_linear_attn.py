@@ -9,8 +9,8 @@ from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
-# levels must equal ceil(log2(seq)) + 1; singleton test pools keep the grid
-# consistent.
+# levels must equal ceil(log2(seq)) + 1; the grid derives it from seq
+# (bench.grid._repair).
 @register_kernel(
     test_inputs={"g": F.logsigmoid, "level_scales": torch.sigmoid}, tags={Tag.SEQUENCE_MIXER, Tag.LINEAR_ATTENTION}
 )
@@ -48,7 +48,13 @@ def log_linear_attn(
 # single head only: with more the kernel diverges from fla's own naive
 # reference and the backward returns misshapen gradients; see ISSUES.md.
 # float16 value gradients land just past tolerance; fp32 and bf16 hold.
-@log_linear_attn.register("fla", source="fla.ops.log_linear_attn.chunk_log_linear_attn")
+def _fla_ready(**arguments):
+    k, v = arguments["k"], arguments["v"]
+    value_dim = v.shape[-1]
+    return k.shape[2] == 1 and k.shape[-1] % 64 == 0 and value_dim & (value_dim - 1) == 0
+
+
+@log_linear_attn.register("fla", source="fla.ops.log_linear_attn.chunk_log_linear_attn", predicate=_fla_ready)
 def log_linear_attn_fla(
     q: Float32[Tensor, "batch seq heads key_dim"] | BFloat16[Tensor, "batch seq heads key_dim"], k, v, g, level_scales
 ):

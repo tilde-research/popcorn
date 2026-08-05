@@ -2,6 +2,29 @@
 import Plotly from 'plotly.js-cartesian-dist-min';
 import { useEffect, useRef } from 'react';
 
+function displayedPlot(element: HTMLDivElement): boolean {
+  if (!element.isConnected || !element.classList.contains('js-plotly-plot')) return false;
+  const styles = getComputedStyle(element);
+  return (
+    styles.display !== 'none' &&
+    styles.visibility !== 'hidden' &&
+    element.offsetWidth > 0 &&
+    element.offsetHeight > 0
+  );
+}
+
+function rethrowUnlessHiddenResize(error: unknown): void {
+  if (!(error instanceof Error) || error.message !== 'Resize must be passed a displayed plot div element.') {
+    throw error;
+  }
+}
+
+function resizeIfDisplayed(element: HTMLDivElement): void {
+  if (!displayedPlot(element)) return;
+  // Plotly rejects if a tab becomes hidden after our check but before its queued resize.
+  void Plotly.Plots.resize(element).catch(rethrowUnlessHiddenResize);
+}
+
 /** Thin imperative bridge to Plotly with theme-aware defaults. */
 export function PlotFrame({ data, layout }: { data: unknown[]; layout: Record<string, unknown> }) {
   const root = useRef<HTMLDivElement>(null);
@@ -9,6 +32,7 @@ export function PlotFrame({ data, layout }: { data: unknown[]; layout: Record<st
   useEffect(() => {
     const element = root.current;
     if (!element) return;
+    let active = true;
     const styles = getComputedStyle(element);
     void Plotly.react(
       element,
@@ -20,19 +44,27 @@ export function PlotFrame({ data, layout }: { data: unknown[]; layout: Record<st
         margin: { l: 56, r: 16, t: 16, b: 44 },
         ...layout,
       },
-      { responsive: true, displaylogo: false },
-    ).then(() => Plotly.Plots.resize(element)); // container may have settled after first measure
+      { displaylogo: false },
+    ).then(() => {
+      if (active) resizeIfDisplayed(element);
+    }).catch(rethrowUnlessHiddenResize);
+    return () => {
+      active = false;
+    };
   }, [data, layout]);
 
   useEffect(() => {
     const element = root.current;
     if (!element) return;
+    let frame = 0;
     const observer = new ResizeObserver(() => {
-      if (element.classList.contains('js-plotly-plot')) void Plotly.Plots.resize(element);
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => resizeIfDisplayed(element));
     });
     observer.observe(element);
     return () => {
       observer.disconnect();
+      cancelAnimationFrame(frame);
       Plotly.purge(element);
     };
   }, []);

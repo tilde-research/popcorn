@@ -249,10 +249,14 @@ def compare_inputs(
         try:
             truth_grads = _grads([truth_outputs[out] for out in graded], truth_inputs, cotangents)
             budget_grads = pull(budget_outputs, budget_inputs)
+        except torch.OutOfMemoryError as error:
+            return _halt(result, "oom", f"reference backward: {error}")
         except Exception as error:
             return _halt(result, "error", f"reference backward: {type(error).__name__}: {error}")
         try:
             mine_grads = pull(mine_outputs, mine_inputs)
+        except torch.OutOfMemoryError as error:
+            return _halt(result, "oom", f"backward: {error}")
         except Exception as error:
             return _halt(result, "crash", f"backward: {type(error).__name__}: {error}")
 

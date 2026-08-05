@@ -3,37 +3,36 @@ title: Overview
 description: A development and dispatch library for high-performance ML kernels
 ---
 
-**Popcorn** is a development and dispatch library for high-performance machine learning
-kernels. It unifies 96 kernels and more than 100 optimized implementations behind a single
-API, then selects among eligible backends using hardware-specific benchmark records. Each
-implementation is checked against a PyTorch reference; failed and unmeasured cases remain
-visible evidence rather than being presented as successful validation.
+**Popcorn** provides a common API for high-performance machine learning kernels. It includes
+96 kernels and more than 100 optimized implementations, selected using hardware-specific
+benchmark data.
 
-Popcorn also ships a growing collection of first-party kernels, along with the environment
-and harness to build, test, benchmark, and deploy new kernels and backends.
+Each kernel has a PyTorch reference. Validation failures and unmeasured cases remain explicit
+and are never treated as successful results. Popcorn also provides tools to develop, test,
+benchmark, and deploy first-party kernels.
 
 ## Terminology
 
-Some frequently used terms are overloaded; Popcorn uses them precisely:
+These terms have specific meanings in Popcorn:
 
 | Term | Meaning |
 | --- | --- |
 | **Kernel** | A pure unit of work with a fixed signature and semantics defined by a *ground-truth* reference. |
 | **Input** | A valid configuration of arguments for a kernel call. |
-| **Case** | The set of all inputs with matching tensor metadata (shape, type) and other arguments — the data inside tensors is abstracted away. |
+| **Case** | A call configuration defined by tensor metadata and other arguments. Tensor values are excluded. |
 | **Implementation** | A function that matches the output of a *kernel's reference* for a subset of valid cases. |
 | **Backend** | A library or collection of *kernel implementations*. |
 
 ## Guides
 
-- [Quick start](./quickstart.md) — install and call your first kernel
-- [Dispatching](./dispatching.md) — how a call resolves to one implementation
-- [Registration](./registration.md) — define kernels and bind implementations
-- [Validation](./validation.md) — compare implementations against the reference
-- [Benchmarking](./benchmarking.md) — record timings and route on data
-- [Tuning](./tuning.md) — select one implementation for a region of shapes
-- [torch.compile](./torch-compile.md) — route compiled models through Popcorn
-- [Optimization loop](./loop.md) — iterate on a candidate kernel with crash-isolated evals
+- [Quick start](./quickstart.md): Install Popcorn and call a kernel
+- [Dispatching](./dispatching.md): Understand implementation selection
+- [Registration](./registration.md): Define kernels and bind implementations
+- [Validation](./validation.md): Compare implementations with the reference
+- [Benchmarking](./benchmarking.md): Record performance data
+- [Tuning](./tuning.md): Select an implementation for a shape range
+- [torch.compile (Experimental)](./torch-compile.md): Route compiled models through Popcorn
+- [Optimization loop (Experimental)](./loop.md): Evaluate candidate kernels in isolated processes
 
-Kernel cards with math, backends, and measured performance live in the
-[kernel explorer](https://tilde-research.github.io/popcorn/kernels).
+See the [kernel explorer](https://tilde-research.github.io/popcorn/kernels) for kernel
+definitions, backends, and measured performance.

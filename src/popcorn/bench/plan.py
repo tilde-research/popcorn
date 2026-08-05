@@ -6,7 +6,6 @@ plan is empty. Effort tiers set confirm-draw counts and covering density.
 
 from __future__ import annotations
 
-import itertools
 import math
 import random
 from collections import defaultdict
@@ -16,7 +15,17 @@ from typing import Any
 import torch
 
 from popcorn.bench.fit import fit, stratum, stratum_key
-from popcorn.bench.grid import DTYPES, GRID, _dim_pool
+from popcorn.bench.grid import (
+    DTYPES,
+    ELLIPSIS,
+    GRID,
+    CasePlan,
+    CaseSeries,
+    _build_case,
+    _dim_pool,
+    _pairwise_rows,
+    _profile_anchors,
+)
 from popcorn.bench.model import Case, Record
 
 EFFORT = {
@@ -26,30 +35,38 @@ EFFORT = {
 }
 
 
-def oom_dominates(oom: Case, candidate: Case) -> bool:
-    """Whether `candidate` is no smaller than an OOM in every shape coordinate.
+# Memory and runtime both grow monotonically with the shape, so a case that exhausted
+# either budget bounds every case above it: one that is no smaller in each coordinate
+# cannot fit, and cannot finish, either. A timeout costs the full per-case budget every
+# time it is rediscovered, which is why it prunes alongside an OOM. Crashes deliberately
+# do not: those are usually tile-boundary or alignment bugs a larger shape may not repeat.
+EXHAUSTED = ("oom", "timeout")
+
+
+def dominates(exhausted: Case, candidate: Case) -> bool:
+    """Whether `candidate` is no smaller than an exhausted case in every shape coordinate.
 
     Dtype, scalar arguments, optional tensors, and batch rank must match. A
     mixed tradeoff remains runnable: lowering any dim is enough to escape the
     dominated region even when another dim grows.
     """
     if (
-        oom.dtype != candidate.dtype
-        or dict(oom.args) != dict(candidate.args)
-        or oom.present != candidate.present
-        or len(oom.batch) != len(candidate.batch)
+        exhausted.dtype != candidate.dtype
+        or dict(exhausted.args) != dict(candidate.args)
+        or exhausted.present != candidate.present
+        or len(exhausted.batch) != len(candidate.batch)
     ):
         return False
-    oom_dims, candidate_dims = dict(oom.dims), dict(candidate.dims)
-    if oom_dims.keys() != candidate_dims.keys():
+    exhausted_dims, candidate_dims = dict(exhausted.dims), dict(candidate.dims)
+    if exhausted_dims.keys() != candidate_dims.keys():
         return False
-    return all(candidate_dims[name] >= value for name, value in oom_dims.items()) and all(
-        candidate_value >= oom_value for oom_value, candidate_value in zip(oom.batch, candidate.batch)
+    return all(candidate_dims[name] >= value for name, value in exhausted_dims.items()) and all(
+        candidate_value >= exhausted_value for exhausted_value, candidate_value in zip(exhausted.batch, candidate.batch)
     )
 
 
-class OOMFrontier:
-    """Minimal observed OOM points under coordinate-wise shape dominance."""
+class BudgetFrontier:
+    """Minimal observed out-of-memory and timeout points under coordinate-wise dominance."""
 
     def __init__(self, cases: Sequence[Case] = ()) -> None:
         self._cases: list[Case] = []
@@ -57,27 +74,13 @@ class OOMFrontier:
             self.add(case)
 
     def blocker(self, candidate: Case) -> Case | None:
-        return next((case for case in self._cases if oom_dominates(case, candidate)), None)
+        return next((case for case in self._cases if dominates(case, candidate)), None)
 
     def add(self, case: Case) -> None:
         if self.blocker(case) is not None:
             return
-        self._cases = [current for current in self._cases if not oom_dominates(case, current)]
+        self._cases = [current for current in self._cases if not dominates(case, current)]
         self._cases.append(case)
-
-
-def _anchor(op: Any) -> dict[str, int]:
-    return {name: _dim_pool(op, name)[0] for name in sorted(op._dims)}
-
-
-def _case(
-    dims: Mapping[str, int],
-    dtype: torch.dtype,
-    batch: tuple[int, ...],
-    args: Mapping[str, Any],
-    present: frozenset[str],
-) -> Case:
-    return Case(tuple(sorted(dims.items())), batch, dtype, tuple(sorted(args.items())), present)
 
 
 def _stratum_key(record: Record) -> tuple[Any, ...]:
@@ -103,35 +106,11 @@ def _mid(lo: int, hi: int) -> int | None:
     return mid if lo < mid < hi else (lo + hi) // 2 if hi > lo + 1 else None
 
 
-def _pairwise(axes: Mapping[str, Sequence[int]], limit: int) -> list[dict[str, int]]:
-    names = sorted(axes)
-    if not names:
-        return []
-    if len(names) == 1:
-        return [{names[0]: value} for value in axes[names[0]][:limit]]
-    pairs = list(itertools.combinations(names, 2))
-    uncovered = {(left, right, a, b) for left, right in pairs for a in axes[left] for b in axes[right]}
-    combos: list[dict[str, int]] = []
-    rng = random.Random(0)
-    while uncovered and len(combos) < limit:
-        best, score = None, -1
-        for _ in range(48):
-            candidate = {name: rng.choice(list(axes[name])) for name in names}
-            hit = sum((left, right, candidate[left], candidate[right]) in uncovered for left, right in pairs)
-            if hit > score:
-                best, score = candidate, hit
-        assert best is not None
-        combos.append(best)
-        for left, right in pairs:
-            uncovered.discard((left, right, best[left], best[right]))
-    return combos
-
-
 def _default_args(op: Any) -> dict[str, Any]:
     return {name: pool[0] for name, pool in op.arg_pools.items() if pool}
 
 
-def plan(
+def adaptive_plan(
     op: Any,
     records: Sequence[Record],
     backend: str,
@@ -139,37 +118,44 @@ def plan(
     effort: str = "standard",
     device: str = "cuda",
     grad: bool = True,
-) -> list[Case]:
-    """Next cases to run for `backend` at the given effort tier."""
+) -> CasePlan:
+    """Named follow-up series for `backend` at the given effort tier."""
     if effort not in EFFORT:
         raise ValueError(f"unknown effort {effort!r}; expected one of {sorted(EFFORT)}")
     budget = EFFORT[effort]
     pools = {name: _dim_pool(op, name) for name in sorted(op._dims)}
-    anchor = _anchor(op)
     labeled = _labels(records, backend)
     regions = fit((record for record in records if record.impl == backend), op._dims)
     dtype = next((dt for dt in DTYPES if any("float" in kind for spec in op.specs for kind in spec.dtypes)), torch.float32)
-    batch = (2048,) if any(... in spec.tokens for spec in op.specs) else ()
     args, present = _default_args(op), frozenset()
+    profile_pools = dict(pools)
+    if any(... in spec.tokens for spec in op.specs):
+        profile_pools[ELLIPSIS] = _dim_pool(op, ELLIPSIS)
+    profile_values = _profile_anchors(profile_pools, "production")
+    leading = {ELLIPSIS: profile_values[ELLIPSIS]} if ELLIPSIS in profile_values else {}
+    context = _build_case(profile_values, dtype, args, present)
+    anchor, batch, args = dict(context.dims), context.batch, dict(context.args)
     dtype_name = str(dtype).removeprefix("torch.")
     layer = stratum_key(device, grad, dtype_name, args, present, bool(batch))
     known = labeled.get(layer, {})
     region = regions.get((backend, *layer))
 
-    todo: list[Case] = []
+    staged: dict[tuple[str, str | None], list[Case]] = {}
     seen: set[str] = set()
 
-    def emit(dims: Mapping[str, int]) -> None:
-        case = _case(dims, dtype, batch, args, present)
+    def emit(stage: str, dims: Mapping[str, int], axis: str | None = None) -> None:
+        if len(seen) >= budget["cap"]:
+            return
+        case = _build_case({**dims, **leading}, dtype, args, present)
         if case.case_id not in seen:
             seen.add(case.case_id)
-            todo.append(case)
+            staged.setdefault((stage, axis), []).append(case)
 
     # 1. Screen: ladder points, one dim at a time.
     for name, pool in pools.items():
         for value in pool:
             if value not in known.get(name, {}):
-                emit({**anchor, name: value})
+                emit("screen", {**anchor, name: value}, name)
 
     # 2. Bisect: log-midpoints between adjacent disagreeing labels.
     for name, labels in known.items():
@@ -178,7 +164,7 @@ def plan(
             if labels[left] == labels[right]:
                 continue
             if (mid := _mid(left, right)) is not None and mid not in labels:
-                emit({**anchor, name: mid})
+                emit("bisect", {**anchor, name: mid}, name)
 
     # 3. Congruence: residue probes at the largest observed magnitude.
     for name, labels in known.items():
@@ -192,22 +178,53 @@ def plan(
             for residue in range(modulus):
                 value = max(1, base + residue)
                 if value not in labels and (value in pools[name] or value in GRID):
-                    emit({**anchor, name: value})
+                    emit("congruence", {**anchor, name: value}, name)
 
     # 4–5. Pairwise covering + confirm draws inside the fitted region.
     if region is not None:
         axes = {name: spec.grid(n=6, seeds=GRID)[:6] for name, spec in region.spaces.items()}
-        for combo in _pairwise(axes, budget["pairwise"]):
-            emit({**anchor, **combo})
-        rng = random.Random(hash((op.name, backend, layer, "confirm")) & 0xFFFFFFFF)
+        for combo in _pairwise_rows(axes, budget["pairwise"]):
+            emit("pairwise", {**anchor, **combo})
+        rng = random.Random(repr((op.name, backend, layer, "confirm")))
         for _ in range(budget["confirm"]):
             dims = dict(anchor)
             for name, spec in region.spaces.items():
                 if drawn := spec.sample(1, rng):
                     dims[name] = drawn[0]
-            emit(dims)
+            emit("confirm", dims)
 
     # Corners of the declared pools.
-    emit(anchor)
-    emit({name: pool[-1] for name, pool in pools.items()})
-    return todo[: budget["cap"]]
+    emit("corners", anchor)
+    emit("corners", {name: pool[-1] for name, pool in pools.items()})
+    series = []
+    for (stage, axis), cases in staged.items():
+        fixed = tuple((name, value) for name, value in sorted(anchor.items()) if name != axis)
+        suffix = f":{axis}" if axis is not None else ""
+        series.append(
+            CaseSeries(
+                f"adaptive:{stage}{suffix}",
+                "adaptive",
+                tuple(cases),
+                profile="production",
+                axis=axis,
+                fixed_dims=fixed,
+                batch=batch,
+                dtype=dtype,
+                args=tuple(sorted(args.items())),
+                present=present,
+            )
+        )
+    return CasePlan(tuple(series))
+
+
+def plan(
+    op: Any,
+    records: Sequence[Record],
+    backend: str,
+    *,
+    effort: str = "standard",
+    device: str = "cuda",
+    grad: bool = True,
+) -> list[Case]:
+    """Compatibility API returning the flattened adaptive plan."""
+    return adaptive_plan(op, records, backend, effort=effort, device=device, grad=grad).flatten()

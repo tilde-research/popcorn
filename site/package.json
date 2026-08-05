@@ -2,10 +2,15 @@
   "name": "popcorn-site",
   "version": "0.0.1",
   "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "next build",
     "dev": "next dev",
     "start": "serve out",
+    "test": "node --experimental-strip-types --test components/kernels/model.test.ts lib/live-bench.test.ts",
     "types:check": "fumadocs-mdx && next typegen && tsc --noEmit"
   },
   "dependencies": {

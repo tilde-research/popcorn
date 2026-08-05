@@ -30,9 +30,10 @@ from popcorn.bench.__main__ import (
     cmd_run,
     cmd_submit,
 )
-from popcorn.bench.grid import ELLIPSIS, _dim_pool, cases, covering_cases, make_inputs
+from popcorn.bench.grid import ELLIPSIS, _dim_pool, case_plan, cases, covering_cases, make_inputs, sample_cases
 from popcorn.bench.model import Environment, Record, Result
 from popcorn.bench.readme import badges, matrix
+from popcorn.bench.service import INCOMPLETE
 from popcorn.bench.store import PUBLISHED, Store, bundled_path, read, read_file, unmeasured, write
 from popcorn.bench.viewer import render
 from popcorn.core import Dispatcher
@@ -58,6 +59,14 @@ def _op():
     op = Dispatcher(reference)
     op.register("alt")(lambda x: x + 1)
     return op
+
+
+def test_legacy_missing_hash_does_not_validate_hashable_code():
+    assert store.matching(None, None)
+    assert store.matching(None, "recorded")
+    assert store.matching("current", "current")
+    assert not store.matching("current", None)
+    assert not store.matching("current", "stale")
 
 
 def test_readme_counts_reference_as_an_implementation():
@@ -256,14 +265,39 @@ def test_grid_is_deterministic_and_uses_canonical_config(monkeypatch):
 def test_covering_grid_uses_every_canonical_dim_value():
     for op in KERNELS.values():
         grid = covering_cases(op)
-        # An op declaring both head counts has `kv_heads` snapped onto a divisor of
-        # `q_heads`, which adds real group counts the pool never lists; pairwise coverage
-        # still pairs each declared value with itself, so none of them is lost.
-        grouped = {"q_heads", "kv_heads"} <= op._dims
+        # Repaired axes deviate from their declared pool (see bench.grid._repair): snapped
+        # axes (`kv_heads`, `half`) keep every declared value reachable somewhere, while
+        # derived axes are recomputed from the dimensions or scalar arguments they follow.
+        snapped = set()
+        if {"q_heads", "kv_heads"} <= op._dims:
+            snapped.add("kv_heads")
+        if {"half", "head_dim"} <= op._dims:
+            snapped.add("half")
+        if {"boundaries", "total"} <= op._dims:
+            snapped.add("boundaries")
+        if {"kernel_size", "seq"} <= op._dims:
+            snapped.add("kernel_size")
+        derived: dict[str, set[int]] = {}
+        if {"levels", "seq"} <= op._dims:
+            derived["levels"] = {math.ceil(math.log2(seq)) + 1 if seq > 1 else 1 for seq in _dim_pool(op, "seq")}
+        if {"cos_batch", "batch"} <= op._dims:
+            derived["cos_batch"] = {1} | (set(_dim_pool(op, "cos_batch")) & set(_dim_pool(op, "batch")))
+        if {"gate_dim", "heads", "key_dim"} <= op._dims:
+            products = {h * k for h in _dim_pool(op, "heads") for k in _dim_pool(op, "key_dim")}
+            derived["gate_dim"] = products
+        if {"block_count", "block_size"} <= op.arg_pools.keys() and "seq" in op._dims:
+            derived["seq"] = {
+                min(seq, count * size)
+                for seq in _dim_pool(op, "seq")
+                for count in op.arg_pools["block_count"] or ()
+                for size in op.arg_pools["block_size"] or ()
+            }
         for name in op._dims:
             seen, pool = {dict(case.dims)[name] for case in grid}, set(_dim_pool(op, name))
-            if grouped and name == "kv_heads":
+            if name in snapped:
                 assert pool <= seen and all(value <= max(pool) for value in seen), f"{op.name}:{name}"
+            elif name in derived:
+                assert seen <= derived[name], f"{op.name}:{name}"
             else:
                 assert seen == pool, f"{op.name}:{name}"
         if any(... in spec.tokens for spec in op.specs):
@@ -314,6 +348,43 @@ def test_input_allocation_oom_is_recorded_as_oom(monkeypatch):
     record = op.bench.run_case("alt", cases(op, 1)[0], device="cpu", trials=1, benchmark=False)
     assert record.result.status == "oom"
     assert record.result.reason == "inputs: test capacity"
+
+
+class _OOMBackward(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        return x.clone()
+
+    @staticmethod
+    def backward(ctx, grad):
+        raise torch.OutOfMemoryError("test capacity")
+
+
+def test_backward_oom_is_recorded_as_oom_not_error():
+    oom_on_backward = lambda x: _OOMBackward.apply(x)  # noqa: E731 - `apply` takes no keywords
+    result = comparison.compare_inputs(
+        oom_on_backward,
+        oom_on_backward,
+        [{"x": torch.ones(4)}],
+        backward=True,
+        benchmark=False,
+        repeats=1,
+        warmup=0,
+    )
+    assert result.status == "oom"
+
+
+def test_comparison_oom_outside_either_side_is_recorded_as_oom(monkeypatch):
+    """The float64 ground truth allocates too, and a shape that does not fit still prunes."""
+    op = _op()
+
+    def out_of_memory(*args, **kwargs):
+        raise torch.OutOfMemoryError("test capacity")
+
+    monkeypatch.setattr("popcorn.bench.service.compare_inputs", out_of_memory)
+    record = op.bench.run_case("alt", cases(op, 1)[0], device="cpu", trials=1, benchmark=False)
+    assert record.result.status == "oom"
+    assert record.result.reason == "harness: test capacity"
 
 
 def test_run_case_reuses_torch_timing_from_the_shared_store(monkeypatch, tmp_path):
@@ -432,6 +503,17 @@ def test_published_rows_round_trip_through_parquet(tmp_path):
     assert [record.to_dict() for record in read(tmp_path)] == [record.to_dict() for record in records]
 
 
+def test_local_published_edits_keep_the_tracked_revision_marker(tmp_path):
+    (tmp_path / "REVISION").write_text("base-pin\n")
+    incomplete = _record("error", "incomplete")
+    incomplete.result.reason = INCOMPLETE
+    write([_record(), incomplete], tmp_path, PUBLISHED)
+
+    assert (tmp_path / store.FETCHED).read_text() == "base-pin\n"
+    assert store.scrub(tmp_path, lambda record: record.result.reason == INCOMPLETE) == 1
+    assert (tmp_path / store.FETCHED).read_text() == "base-pin\n"
+
+
 def test_parquet_keeps_columns_typed_when_a_field_is_always_absent(tmp_path):
     """backend_version is None for every first-party row; it must still read back as text."""
     write([_record()], tmp_path, PUBLISHED)
@@ -515,7 +597,7 @@ def test_publish_command_forwards_the_repository_and_message(monkeypatch, capsys
 def test_publish_rejects_unsuccessful_rows():
     with pytest.raises(SystemExit, match="refusing to publish.*error=1"):
         _require_clean([_record("error")])
-    _require_clean([_record("pass"), _record("skip")])
+    _require_clean([_record("pass"), _record("skip"), _record("oom"), _record("timeout")])
 
 
 def test_unmeasured_wants_a_timing_even_when_correctness_already_passed():
@@ -529,9 +611,10 @@ def test_unmeasured_wants_a_timing_even_when_correctness_already_passed():
     assert not unmeasured(timed, benchmark=False)
 
 
-def test_fill_retains_stable_skip_and_oom_evidence():
+def test_fill_retains_stable_skip_and_exhausted_evidence():
     assert not _fill_pending(_record("skip"))
     assert not _fill_pending(_record("oom"))
+    assert not _fill_pending(_record("timeout"))
     assert _fill_pending(_record("error"))
 
 
@@ -568,7 +651,7 @@ def test_fill_prunes_dominated_oom_shapes_but_runs_mixed_tradeoffs(monkeypatch, 
         )
 
     monkeypatch.setitem(cmd_fill.__globals__, "Store", FakeStore)
-    monkeypatch.setitem(cmd_fill.__globals__, "_covering_work", lambda *args: work)
+    monkeypatch.setitem(cmd_fill.__globals__, "_work", lambda *args: work)
     monkeypatch.setitem(cmd_fill.__globals__, "_usable_records", lambda *args: [])
     monkeypatch.setitem(cmd_fill.__globals__, "available", lambda impl: True)
     monkeypatch.setattr(op.bench, "run_case", run_case)
@@ -662,13 +745,15 @@ def test_reports_and_viewer_consume_typed_records():
 
 def test_empty_cli_work_is_an_error(tmp_path):
     with pytest.raises(SystemExit, match="no report rows"):
-        cmd_merge(Namespace(sources=[tmp_path / "missing.jsonl"], expect=None, check=False))
+        cmd_merge(Namespace(sources=[tmp_path / "missing.jsonl"], expect=None, check=False, scrub_incomplete=False))
     with pytest.raises(SystemExit, match="expected 2 shard files"):
-        cmd_merge(Namespace(sources=[tmp_path / "one.jsonl"], expect=2, check=False))
+        cmd_merge(Namespace(sources=[tmp_path / "one.jsonl"], expect=2, check=False, scrub_incomplete=False))
     with pytest.raises(SystemExit, match="needs shard files"):
-        cmd_merge(Namespace(sources=[], expect=None, check=False))
+        cmd_merge(Namespace(sources=[], expect=None, check=False, scrub_incomplete=False))
     with pytest.raises(SystemExit, match="pass no sources"):
-        cmd_merge(Namespace(sources=[tmp_path / "one.jsonl"], expect=None, check=True))
+        cmd_merge(Namespace(sources=[tmp_path / "one.jsonl"], expect=None, check=True, scrub_incomplete=False))
+    with pytest.raises(SystemExit, match="pass no sources or --check"):
+        cmd_merge(Namespace(sources=[tmp_path / "one.jsonl"], expect=None, check=False, scrub_incomplete=True))
     with pytest.raises(SystemExit, match="no matching"):
         cmd_run(
             Namespace(
@@ -687,6 +772,25 @@ def test_empty_cli_work_is_an_error(tmp_path):
         )
 
 
+def test_scrub_drops_only_selected_rows_and_removes_emptied_files(tmp_path):
+    keep, junk = _record(), _record("error", "other")
+    junk.result.reason = INCOMPLETE
+    write([keep, junk], tmp_path, PUBLISHED)
+    orphan = _record("error", "doomed")
+    orphan.op = "gone"
+    orphan.result.reason = INCOMPLETE
+    write([orphan], tmp_path)
+    (tmp_path / store.FETCHED).write_text("cafe")
+
+    dropped = store.scrub(tmp_path, lambda record: record.result.reason == INCOMPLETE)
+
+    assert dropped == 2
+    assert [record.case_id for record in read(tmp_path)] == ["case"]
+    assert not (tmp_path / f"gone{store.SCRATCH}").exists()
+    assert not (tmp_path / store.FETCHED).exists()
+    assert store.scrub(tmp_path, lambda record: record.result.reason == INCOMPLETE) == 0
+
+
 def _selector(path, op, impl, *grid_cases):
     """A JSONL of report rows, as `run --only` consumes it."""
     rows = []
@@ -696,6 +800,15 @@ def _selector(path, op, impl, *grid_cases):
         rows.append(json.dumps(record.to_dict(), sort_keys=True))
     path.write_text("\n".join(rows) + "\n")
     return str(path)
+
+
+def test_work_uses_the_shared_plan_and_only_samples_when_limited():
+    op = popcorn.KERNELS["rms_norm"]
+    backend = next(name for name in op.available_backends() if name != "torch")
+    planned = [case for _, _, case in _work([op.name], backend=backend)]
+    sampled = [case for _, _, case in _work([op.name], backend=backend, limit=4)]
+    assert planned == case_plan(op).flatten()
+    assert sampled == sample_cases(op, 4)
 
 
 def test_only_rebuilds_exactly_the_recorded_cases(tmp_path):

@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from jaxtyping import BFloat16, Float, Float32
+from jaxtyping import BFloat16, Float
 from torch import Tensor
 
 from popcorn import Tag, kernel, register_kernel
@@ -45,10 +45,11 @@ def rwkv7(
     return torch.stack(outs, 1).to(r.dtype)
 
 
-# float16 value gradients land just past tolerance; fp32 and bf16 hold.
+# float16 value gradients land just past tolerance; upstream warns that its
+# chunked delta-rule path does not support float32 on this stack.
 @rwkv7.register("fla", source="fla.ops.rwkv7.chunk_rwkv7")
 def rwkv7_fla(
-    r: Float32[Tensor, "batch seq heads key_dim"] | BFloat16[Tensor, "batch seq heads key_dim"],
+    r: BFloat16[Tensor, "batch seq heads key_dim"],
     w,
     k,
     v,

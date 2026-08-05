@@ -24,7 +24,7 @@ def kl_div(
     $$\mathcal{L} = \mathrm{KL}(q \,\|\, p) = \sum_i q_i \big(\log q_i - \log p_i\big)$$
     """
     target = target.detach()
-    loss = target.exp() * (target - x) if log_target else target * (target.clamp(min=eps).log() - x)
+    loss = target.exp() * (target - x) if log_target else target.xlogy(target.clamp(min=eps)) - target * x
     if reduction == "none":
         return loss
     if reduction == "batchmean":

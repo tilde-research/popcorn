@@ -118,11 +118,9 @@ class Implementation:
         """Digest of the code this implementation would run; None disables staleness checks."""
         parts = [self.adapter, self.predicate]
         if self.source is not None and self.source.startswith(SCOPES):
-            try:
-                self._prepare()  # first-party sources live in popcorn and carry no version signal
-            except Exception:
-                return None
-            parts.append(self.source_fn)
+            # Static module hashing is independent of optional imports, so audit and
+            # benchmark environments agree even when only the latter can load the source.
+            return fingerprint(*(part for part in parts if part is not None), source=self.source)
         return fingerprint(*(part for part in parts if part is not None))
 
     def rejects(self, values: Mapping[str, Any], arguments: Mapping[str, Any]) -> str | None:

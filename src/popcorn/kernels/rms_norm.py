@@ -1,6 +1,11 @@
 from typing import Literal
 
 import torch
+
+# liger's rms_norm checks `isinstance(X, torch.distributed.tensor.DTensor)` without
+# importing the submodule, which only resolves when something else imported it first
+# (see ISSUES.md); loading it here keeps the check working in minimal environments.
+import torch.distributed.tensor  # noqa: F401
 from jaxtyping import Float
 from torch import Tensor
 
@@ -41,7 +46,7 @@ def _aligned(**arguments):
     return x.dtype == torch.float32 or x.shape[-1] % 8 == 0
 
 
-@rms_norm.register("quack", source="quack.rmsnorm.rmsnorm", predicate=_aligned)
+@rms_norm.register("quack", source="quack.rmsnorm", predicate=_aligned)
 def rms_norm_quack(x, weight, bias, eps):
     return kernel(x, weight, bias, eps=eps)
 

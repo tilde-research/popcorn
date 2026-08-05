@@ -37,6 +37,24 @@ def attn(
     ).transpose(1, 2)
 
 
+@attn.register("cudnn", source="cudnn.experimental.ops.scaled_dot_product_attention")
+def attn_cudnn(
+    q: Float16[Tensor, "batch seq q_heads head_dim"] | BFloat16[Tensor, "batch seq q_heads head_dim"],
+    k: Float16[Tensor, "batch seq kv_heads head_dim"] | BFloat16[Tensor, "batch seq kv_heads head_dim"],
+    v: Float16[Tensor, "batch seq kv_heads head_dim"] | BFloat16[Tensor, "batch seq kv_heads head_dim"],
+    causal,
+    softmax_scale,
+):
+    return kernel(
+        q.transpose(1, 2),
+        k.transpose(1, 2),
+        v.transpose(1, 2),
+        scale=softmax_scale,
+        is_causal=causal,
+        enable_gqa=True,
+    ).transpose(1, 2)
+
+
 @attn.register("fa3", source="flash_attn_interface.flash_attn_func")
 def attn_fa3(
     q: Float16[Tensor, "batch seq q_heads head_dim"] | BFloat16[Tensor, "batch seq q_heads head_dim"],

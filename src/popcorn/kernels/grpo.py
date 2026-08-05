@@ -1,14 +1,25 @@
+import math
+
+import torch
 from jaxtyping import Float, Float32, Int
 from torch import Tensor
 
 from popcorn import Tag, kernel, register_kernel
+from popcorn.kernels._utils import upcast
+
+
+def _log_probability(tensor, dims, _generator):
+    return -tensor.abs() - math.log(dims["vocab"])
 
 
 # logits carry one extra position (the unused next-token prediction, fla's
 # contract). ref_logp, advantages, and the mask are constants, matching fla.
 @register_kernel(
     test_args={"beta": [0.0, 0.1]},
-    test_inputs={"completion_mask": lambda t: (t > 0).float()},
+    test_inputs={
+        "ref_logp": _log_probability,
+        "completion_mask": lambda t: (t > 0).float(),
+    },
     tags={Tag.LOSS, Tag.FUSED},
 )
 def grpo(
@@ -26,11 +37,11 @@ def grpo(
 
     [GRPO (Shao et al., 2024)](https://arxiv.org/abs/2402.03300)
     """
-    logps = logits[:, :-1].log_softmax(-1).gather(-1, input_ids[:, 1:, None]).squeeze(-1)
-    delta = ref_logp.detach() - logps
-    kl = delta.exp() - delta - 1
-    loss = -((logps - logps.detach()).exp() * advantages.detach()[:, None] - beta * kl)
-    return loss if completion_mask is None else loss * completion_mask.detach()
+    logps = upcast(logits[:, :-1]).log_softmax(-1).gather(-1, input_ids[:, 1:, None]).squeeze(-1)
+    delta = upcast(ref_logp).detach() - logps
+    kl = torch.expm1(delta) - delta
+    loss = -((logps - logps.detach()).exp() * upcast(advantages).detach()[:, None] - beta * kl)
+    return loss if completion_mask is None else loss * upcast(completion_mask).detach()
 
 
 # fla always returns the loss in fp32, so only float32 inputs round-trip.

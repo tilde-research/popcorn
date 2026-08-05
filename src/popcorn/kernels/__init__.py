@@ -2,12 +2,20 @@
 
 from popcorn.core.sources import declare_backend
 
+declare_backend("cudnn", package="nvidia-cudnn-frontend", min_version="1.22.1", max_version="1.22.1", extra="cudnn")
 declare_backend("fa3", package="flash-attn-3", min_version="3.0.0", max_version="3.0.0", extra="fa3")
 declare_backend("fla", package="flash-linear-attention", min_version="0.4.0", max_version="0.4.2", extra="fla")
 declare_backend("liger", package="liger-kernel", min_version="0.6.0", max_version="0.7.0", extra="liger")
-declare_backend("popcorn", package="triton", min_version="3.6.0", max_version="3.6.0")
+declare_backend("popcorn", package="triton", min_version="3.7.1", max_version="3.7.1")
 declare_backend("quack", package="quack-kernels", min_version="0.5.0", max_version="0.5.0", extra="quack")
-declare_backend("unsloth", package="unsloth", min_version="2026.7.1", max_version="2026.7.5", extra="unsloth")
+declare_backend(
+    "transformer_engine",
+    package="transformer-engine",
+    min_version="2.17.0",
+    max_version="2.17.0",
+    extra="transformer_engine",
+)
+declare_backend("unsloth", package="unsloth", min_version="2026.3.11", max_version="2026.3.11", extra="unsloth")
 
 from popcorn.kernels.abc import abc
 from popcorn.kernels.add_rms_norm import add_rms_norm

@@ -6,8 +6,8 @@ from popcorn import Tag, kernel, register_kernel
 from popcorn.kernels._utils import upcast
 
 
-# seq must be a multiple of mini_batch_size; the singleton pool keeps the grid
-# on 16-aligned lengths.
+# seq must be a multiple of mini_batch_size; the grid snaps the mini-batch onto
+# a divisor of seq (bench.grid._repair).
 @register_kernel(
     test_inputs={
         "eta": lambda t: torch.sigmoid(t) * 0.02,

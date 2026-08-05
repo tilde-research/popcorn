@@ -4,6 +4,7 @@ from jaxtyping import Float, Float32
 from torch import Tensor
 
 from popcorn import Tag, kernel, register_kernel
+from popcorn.kernels._utils import upcast
 
 
 # q is the target and treated as a constant, matching liger.
@@ -23,7 +24,7 @@ def tvd(
     distance = 0.5 * (p - q.detach()).abs()
     if reduction == "none":
         return distance
-    total = distance.sum()
+    total = upcast(distance).sum()
     if reduction == "mean":
         return total / p.numel()
     return total / p.shape[0] if reduction == "batchmean" else total

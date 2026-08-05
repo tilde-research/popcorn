@@ -16,10 +16,12 @@ import torch
 import popcorn.kernels  # noqa: F401
 from popcorn import KERNELS
 from popcorn.bench import hub
-from popcorn.bench.grid import cases, covering_cases
+from popcorn.bench.grid import backward_safe, case_plan, sample_cases
+from popcorn.bench.live import DEFAULT_PORT, LiveServer
 from popcorn.bench.model import Case, Record
-from popcorn.bench.plan import EFFORT, OOMFrontier, plan
+from popcorn.bench.plan import EFFORT, EXHAUSTED, BudgetFrontier, adaptive_plan
 from popcorn.bench.readme import refresh
+from popcorn.bench.service import INCOMPLETE
 from popcorn.bench.store import (
     BUNDLED_REPORTS,
     PUBLISHED,
@@ -29,10 +31,12 @@ from popcorn.bench.store import (
     prefer,
     read,
     read_file,
+    scrub,
     unmeasured,
     user_reports,
     write,
 )
+from popcorn.bench.sweep import estimated, infeasible
 from popcorn.bench.viewer import render
 from popcorn.core.config import device_name
 from popcorn.core.dispatcher import Dispatcher, Implementation
@@ -66,6 +70,13 @@ def _positive(value: str) -> int:
     if number < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
     return number
+
+
+def _port(value: str) -> int:
+    port = int(value)
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("must be between 1 and 65535")
+    return port
 
 
 def _shard(value: str) -> tuple[int, int]:
@@ -103,7 +114,7 @@ def _target_device(args: argparse.Namespace) -> str:
 def _selected(only: str, ops: list[str], backend: str | None = None) -> list[tuple[Dispatcher, str, Case]]:
     """Rebuild exactly the cases named by recorded rows, from the config each row carries.
 
-    Rebuilding beats intersecting with a fresh grid: `cases()` samples huge product spaces,
+    Rebuilding beats intersecting with a fresh grid: Cartesian samples shift as pools change,
     so the sampled subset shifts whenever a pool or the sampler changes, and rows recorded
     before such a change would silently drop out of a rerun.
     """
@@ -140,18 +151,7 @@ def _work(
         return _selected(only, ops, backend)
     work = []
     for op in (KERNELS[name] for name in ops or sorted(KERNELS)):
-        op_cases = cases(op, limit)
-        for candidate in op.available_backends():
-            if candidate != "torch" and backend in (None, candidate):
-                work.extend((op, candidate, case) for case in op_cases)
-    return work
-
-
-def _covering_work(ops: list[str], backend: str | None = None) -> list[tuple[Dispatcher, str, Case]]:
-    """Pairwise coverage of every declared case axis for each selected implementation."""
-    work = []
-    for op in (KERNELS[name] for name in ops or sorted(KERNELS)):
-        op_cases = covering_cases(op)
+        op_cases = sample_cases(op, limit) if limit is not None else case_plan(op).flatten()
         for candidate in op.available_backends():
             if candidate != "torch" and backend in (None, candidate):
                 work.extend((op, candidate, case) for case in op_cases)
@@ -294,11 +294,7 @@ def _pending(directory: Path, stored: Mapping[tuple, Record]) -> tuple[int, int,
 
 
 def _require_clean(records: list[Record]) -> None:
-    bad = [
-        record
-        for record in records
-        if record.result.status in ("fail", "crash", "error", "timeout") or record.result.bench_error
-    ]
+    bad = [record for record in records if record.result.status in ("fail", "crash", "error") or record.result.bench_error]
     if bad:
         counts = Counter(record.result.status if not record.result.bench_error else "bench_error" for record in bad)
         summary = ", ".join(f"{status}={count}" for status, count in sorted(counts.items()))
@@ -316,6 +312,13 @@ def _require_passing_reports() -> None:
 
 
 def cmd_merge(args: argparse.Namespace) -> None:
+    if args.scrub_incomplete:
+        if args.sources or args.check:
+            raise SystemExit("merge --scrub-incomplete rewrites the whole store; pass no sources or --check")
+        dropped = scrub(BUNDLED_REPORTS, lambda record: record.result.reason == INCOMPLETE)
+        refresh(ops=KERNELS)
+        print(f"dropped {dropped} incomplete sentinel row(s); README badges refreshed")
+        return
     if args.check:
         if args.sources:
             raise SystemExit("merge --check scans the shard directories; pass no sources")
@@ -393,73 +396,128 @@ def _record_index(records: list[Record]) -> dict[tuple[str, str, str, bool], Rec
 
 
 def _fill_pending(record: Record | None) -> bool:
-    """Retry absent and inconclusive work, but retain stable rejection and OOM evidence."""
-    return record is None or (record.result.status not in ("skip", "oom") and unmeasured(record))
+    """Retry absent and inconclusive work, but retain rejections and exhausted budgets.
+
+    A case that prunes the shapes above it has to be settled for itself too, or every sweep
+    pays the same OOM or the whole timeout again to rediscover a boundary already recorded.
+    """
+    return record is None or (record.result.status not in ("skip", *EXHAUSTED) and unmeasured(record))
 
 
 def cmd_fill(args: argparse.Namespace) -> None:
-    """Benchmark pairwise case coverage this machine has no timed row for, into the user cache.
+    """Benchmark the shared case plan this machine has no timed row for, into the user cache.
 
-    Pairwise coverage includes every declared dim value without materializing the full product.
-    Observed OOMs prune only coordinate-wise larger shapes in the same case stratum.
+    The plan combines pairwise coverage with named curves without materializing the full product.
+    An observed OOM or timeout prunes only coordinate-wise larger shapes in the same stratum.
     """
     args.device = _target_device(args)
     device = device_name(args.device)
     store = Store()
-    planned = _work(args.ops, args.backend, args.limit) if args.limit is not None else _covering_work(args.ops, args.backend)
+    planned = _work(args.ops, args.backend, args.limit)
     work = [(op, impl, case) for op, impl, case in planned if available(impl)]
     if not work:
         raise SystemExit("no matching installed non-torch backend cases")
     current = _usable_records(store, work, device)
     cached = {} if args.force else _record_index(current)
-    frontiers: dict[tuple[str, str, bool], OOMFrontier] = {}
+    frontiers: dict[tuple[str, str, bool], BudgetFrontier] = {}
+    reference_frontiers: dict[tuple[str, bool], BudgetFrontier] = {}
     if not args.force:
         for record in current:
-            if record.result.status == "oom":
+            if record.result.status in EXHAUSTED:
                 key = (record.op, record.impl, record.result.grad)
-                frontiers.setdefault(key, OOMFrontier()).add(Case.from_config(record.config))
-    todo = [
-        (op, impl, case)
-        for op, impl, case in work
-        if _fill_pending(cached.get((op.name, impl, case.case_id, not _impl(op, impl).forward_only)))
-    ]
-    print(f"{len(work)} case-impl pairs: {len(work) - len(todo)} already cached, {len(todo)} to consider")
+                frontiers.setdefault(key, BudgetFrontier()).add(Case.from_config(record.config))
+        references = list({op.name: (op, "torch", case) for op, _, case in work}.values())
+        for record in _usable_records(store, references, device):
+            if record.result.status in EXHAUSTED:
+                reference_frontiers.setdefault((record.op, record.result.grad), BudgetFrontier()).add(
+                    Case.from_config(record.config)
+                )
+    capacity = (
+        torch.cuda.get_device_properties(torch.device(args.device)).total_memory
+        if torch.device(args.device).type == "cuda"
+        else sys.maxsize
+    )
+    todo = []
+    skipped = 0
+    for op, impl, case in work:
+        grad = not _impl(op, impl).forward_only and backward_safe(op, case)
+        if not _fill_pending(cached.get((op.name, impl, case.case_id, grad))):
+            continue
+        reference_frontier = reference_frontiers.get((op.name, grad))
+        if infeasible(op, case, grad, capacity) or (
+            reference_frontier is not None and reference_frontier.blocker(case) is not None
+        ):
+            skipped += 1
+            continue
+        todo.append((op, impl, case, grad))
+    todo.sort(key=lambda item: estimated(item[0], item[2]))
+    cached_count = len(work) - len(todo) - skipped
+    print(
+        f"{len(work)} case-impl pairs: {cached_count} already cached, {skipped} infeasible or reference-pruned, {len(todo)} to consider"
+    )
     isolation = "in-process" if args.in_process else f"{args.timeout}s/case worker"
     if not todo:
         return
-    print(f"measuring with monotonic OOM pruning ({isolation}) -> {store.user}")
+    print(f"measuring with monotonic budget pruning ({isolation}) -> {store.user}")
+    live = None
+    if getattr(args, "live", None) is not None:
+        live = LiveServer(
+            args.live,
+            device=device,
+            ops=sorted({op.name for op, _, _, _ in todo}),
+            total=len(todo),
+            cached=cached_count,
+            skipped=skipped,
+        )
+        try:
+            live.start()
+        except OSError as error:
+            raise SystemExit(f"could not bind live benchmark server to 127.0.0.1:{args.live}: {error}") from None
+        print(f"streaming live results at http://{live.host}:{live.port}")
     pending: list[Record] = []
     tally: Counter[str] = Counter()
     pruned = 0
     measured = 0
-    for op, impl, case in todo:
-        key = (op.name, impl, not _impl(op, impl).forward_only)
-        frontier = frontiers.setdefault(key, OOMFrontier())
-        if frontier.blocker(case) is not None:
-            pruned += 1
-            continue
-        if args.in_process:
+    try:
+        for op, impl, case, grad in todo:
+            key = (op.name, impl, grad)
+            frontier = frontiers.setdefault(key, BudgetFrontier())
+            if frontier.blocker(case) is not None:
+                pruned += 1
+                if live is not None:
+                    live.pruned()
+                continue
+            if args.in_process:
+                try:
+                    record = op.bench.run_case(impl, case, args.device, args.reps, grad=grad)
+                except Exception as error:
+                    record = op.bench.incomplete(impl, case, args.device, f"{type(error).__name__}: {error}", grad=grad)
+            else:
+                record = _isolated(op, impl, case, args.device, args.reps, args.timeout, grad=grad)
+            pending.append(record)
+            measured += 1
+            tally[record.result.status] += 1
+            if live is not None:
+                live.record(record)
+            if record.result.status in EXHAUSTED:
+                frontier.add(case)
+            if len(pending) >= args.flush:
+                store.write_user(pending)
+                pending.clear()
             try:
-                record = op.bench.run_case(impl, case, args.device, args.reps)
+                torch.zeros(1, device=args.device).item()
             except Exception as error:
-                record = op.bench.incomplete(impl, case, args.device, f"{type(error).__name__}: {error}")
-        else:
-            record = _isolated(op, impl, case, args.device, args.reps, args.timeout)
-        pending.append(record)
-        measured += 1
-        tally[record.result.status] += 1
-        if record.result.status == "oom":
-            frontier.add(case)
-        if len(pending) >= args.flush:
+                store.write_user(pending)
+                raise SystemExit(f"device poisoned after {measured} measurements: {type(error).__name__}: {error}") from None
+        if pending:
             store.write_user(pending)
-            pending.clear()
-        try:
-            torch.zeros(1, device=args.device).item()
-        except Exception as error:
-            store.write_user(pending)
-            raise SystemExit(f"device poisoned after {measured} measurements: {type(error).__name__}: {error}") from None
-    if pending:
-        store.write_user(pending)
+    except BaseException as error:
+        if live is not None:
+            live.close(error)
+        raise
+    else:
+        if live is not None:
+            live.close()
     print(f"cached {measured} row(s), pruned {pruned} dominated shape(s) -> {store.user}")
     for status, count in tally.most_common():
         print(f"  {status}: {count}")
@@ -502,7 +560,14 @@ def cmd_map(args: argparse.Namespace) -> None:
             rounds = 0
             while rounds < args.rounds:
                 records = store.merged(op.name)
-                todo = plan(op, records, backend, effort=args.effort, device=args.device, grad=not registered.forward_only)
+                todo = adaptive_plan(
+                    op,
+                    records,
+                    backend,
+                    effort=args.effort,
+                    device=args.device,
+                    grad=not registered.forward_only,
+                ).flatten()
                 if args.shard:
                     index, count = args.shard
                     todo = todo[index::count]
@@ -585,13 +650,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m popcorn.bench", description="Popcorn correctness + benchmark harness.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    run = sub.add_parser("run", help="run the grid locally (or one shard of it)")
+    run = sub.add_parser("run", help="run the shared case plan locally (or one shard of it)")
     run.add_argument("ops", nargs="*", help="ops to test (default: all registered)")
     run.add_argument("--backend", help="restrict to one backend")
     run.add_argument("--device", default="cuda")
     run.add_argument("--hardware", help=HARDWARE_HELP)
     run.add_argument("--reps", type=_positive, default=10)
-    run.add_argument("--limit", type=_positive, help="subsample the grid to at most N cases per op")
+    run.add_argument("--limit", type=_positive, help="use a deterministic random Cartesian sample of at most N cases per op")
     run.add_argument("--shard", type=_shard, help="I/K: run the I-th of K deterministic slices")
     run.add_argument("--out", help="write raw rows to this JSONL instead of the reports store")
     run.add_argument("--timeout", type=_positive, default=30, help="seconds per case worker before it is killed")
@@ -613,20 +678,33 @@ def main() -> None:
     merge.add_argument("--expect", type=_positive, help="fail unless this many shard files exist")
     merge.add_argument("--check", action="store_true", help="report shard directories that were never merged; write nothing")
     merge.add_argument("--publish", action="store_true", help=f"upload the merged reports to {hub.REPO} and update the pin")
+    merge.add_argument(
+        "--scrub-incomplete",
+        action="store_true",
+        help="drop rows the harness scheduled but never measured, then refresh the README badges",
+    )
     merge.add_argument("sources", nargs="*")
     merge.set_defaults(fn=cmd_merge)
 
-    fill = sub.add_parser("fill", help="pairwise-cover declared dims not timed on this machine, into the user cache")
+    fill = sub.add_parser("fill", help="measure planned coverage and curves not timed on this machine")
     fill.add_argument("ops", nargs="*", help="ops to measure (default: all registered)")
     fill.add_argument("--backend", help="restrict to one backend")
     fill.add_argument("--device", default="cuda")
     fill.add_argument("--hardware", help=HARDWARE_HELP)
     fill.add_argument("--reps", type=_positive, default=10)
-    fill.add_argument("--limit", type=_positive, help="use the legacy random grid sample of at most N cases per op")
+    fill.add_argument("--limit", type=_positive, help="use a deterministic random Cartesian sample of at most N cases per op")
     fill.add_argument("--timeout", type=_positive, default=30, help="seconds per case worker before it is killed")
     fill.add_argument("--in-process", action="store_true", help="run cases without a worker: no timeout, crashes end the run")
     fill.add_argument("--force", action="store_true", help="measure every combination, including ones already cached")
     fill.add_argument("--flush", type=_positive, default=50, help="write to the cache every N rows")
+    fill.add_argument(
+        "--live",
+        nargs="?",
+        const=DEFAULT_PORT,
+        type=_port,
+        metavar="PORT",
+        help=f"stream this run to the kernel explorer on localhost (default port: {DEFAULT_PORT})",
+    )
     fill.set_defaults(fn=cmd_fill)
 
     pull = sub.add_parser("pull", help="fetch the published reports from the hub")
@@ -644,12 +722,14 @@ def main() -> None:
     view.add_argument("--user", action="store_true", help="include rows from the user cache, newest winning")
     view.set_defaults(fn=cmd_view)
 
-    submit = sub.add_parser("submit", help="submit the grid as a slurm array + merge job")
+    submit = sub.add_parser("submit", help="submit the shared case plan as a slurm array + merge job")
     submit.add_argument("ops", nargs="*")
     submit.add_argument("--array", type=_positive, default=8, help="number of shards")
     submit.add_argument("--hardware", help=f"passed to each array task: {HARDWARE_HELP}")
     submit.add_argument("--reps", type=_positive, default=10)
-    submit.add_argument("--limit", type=_positive, help="subsample the grid to at most N cases per op")
+    submit.add_argument(
+        "--limit", type=_positive, help="use a deterministic random Cartesian sample of at most N cases per op"
+    )
     submit.add_argument("--qos", default=None, help="slurm QoS for the array and merge jobs (default: cluster default)")
     submit.add_argument("--time", default="2:00:00")
     submit.add_argument("--timeout", type=_positive, default=30, help="passed to each array task: seconds per case worker")
