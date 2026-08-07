@@ -16,7 +16,7 @@ import torch
 import popcorn.kernels  # noqa: F401
 from popcorn import KERNELS
 from popcorn.bench import hub
-from popcorn.bench.grid import backward_safe, case_plan, sample_cases
+from popcorn.bench.grid import backward_safe, case_plan, sample_cases, slice_cases
 from popcorn.bench.live import DEFAULT_PORT, LiveServer
 from popcorn.bench.model import Case, Record
 from popcorn.bench.plan import EFFORT, EXHAUSTED, BudgetFrontier, adaptive_plan
@@ -139,6 +139,104 @@ def _selected(only: str, ops: list[str], backend: str | None = None) -> list[tup
     print(f"--only: {len(work)} of {len(seen)} selected cases are runnable")
     for reason, count in skipped.most_common():
         print(f"  {count} skipped: {reason}")
+    return work
+
+
+def _slice_value(token: str) -> object:
+    try:
+        return json.loads(token)
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"--slice value {token!r} must be JSON: {error.msg}") from None
+
+
+def _slice_context(op: Dispatcher, spec: list[str]) -> tuple[str, Case]:
+    if not spec:
+        raise SystemExit("--slice needs an axis followed by its fixed context")
+    axis, *tokens = spec
+    dimensions = set(op._dims)
+    optionals = {tensor.param for tensor in op.specs if tensor.optional}
+    has_leading_batch = any(... in tensor.tokens for tensor in op.specs)
+    fixed: dict[str, int] = {}
+    arguments: dict[str, object] = {}
+    present: set[str] = set()
+    batch: tuple[int, ...] = ()
+    dtype: torch.dtype | None = None
+    seen: set[str] = set()
+    for token in tokens:
+        if token.startswith("+"):
+            name = token[1:]
+            if name not in optionals:
+                raise SystemExit(f"{op.name}: --slice optional {name!r} is not registered")
+            if token in seen:
+                raise SystemExit(f"{op.name}: duplicate --slice token {token!r}")
+            seen.add(token)
+            present.add(name)
+            continue
+        if "=" not in token:
+            raise SystemExit(f"{op.name}: --slice context token {token!r} must be name=JSON or +optional")
+        name, encoded = token.split("=", 1)
+        if name in seen:
+            raise SystemExit(f"{op.name}: duplicate --slice field {name!r}")
+        seen.add(name)
+        if name == "dtype":
+            candidate = getattr(torch, encoded, None)
+            if not isinstance(candidate, torch.dtype):
+                raise SystemExit(f"{op.name}: unknown --slice dtype {encoded!r}")
+            dtype = candidate
+        elif name == "...":
+            value = _slice_value(encoded)
+            if not isinstance(value, list) or any(type(item) is not int or item < 1 for item in value):
+                raise SystemExit(f"{op.name}: --slice ... must be a JSON list of positive batch dimensions")
+            batch = tuple(value)
+        elif name in dimensions:
+            value = _slice_value(encoded)
+            if type(value) is not int or value < 1:
+                raise SystemExit(f"{op.name}: --slice dimension {name!r} must be a positive integer")
+            fixed[name] = value
+        elif name in op.arg_pools:
+            value = _slice_value(encoded)
+            pool = op.arg_pools[name]
+            if pool is not None and not any(value == candidate for candidate in pool):
+                raise SystemExit(f"{op.name}: --slice argument {name}={value!r} is outside {list(pool)!r}")
+            arguments[name] = value
+        else:
+            raise SystemExit(f"{op.name}: unknown --slice field {name!r}")
+    if axis in fixed:
+        raise SystemExit(f"{op.name}: --slice axis {axis!r} must not also be fixed")
+    if dtype is None:
+        raise SystemExit(f"{op.name}: --slice requires dtype=<name>")
+    if batch and not has_leading_batch:
+        raise SystemExit(f"{op.name}: --slice fixes leading batch, but this kernel has no leading batch dimensions")
+    if missing := sorted(set(op.arg_pools) - arguments.keys()):
+        raise SystemExit(f"{op.name}: --slice is missing scalar arguments {missing}")
+    context = Case(
+        tuple(sorted(fixed.items())),
+        batch,
+        dtype,
+        tuple(sorted(arguments.items())),
+        frozenset(present),
+    )
+    return axis, context
+
+
+def _slice_work(ops: list[str], backend: str | None, spec: list[str]) -> list[tuple[Dispatcher, str, Case]]:
+    if len(ops) != 1:
+        raise SystemExit("--slice requires exactly one op")
+    name = ops[0]
+    if name not in KERNELS:
+        raise SystemExit(f"unknown op {name!r}")
+    op = KERNELS[name]
+    axis, context = _slice_context(op, spec)
+    try:
+        cases = slice_cases(op, axis, context)
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
+    if not cases:
+        raise SystemExit(f"{op.name}: no valid production points preserve this exact {axis} slice")
+    work = []
+    for candidate in op.available_backends():
+        if candidate != "torch" and backend in (None, candidate):
+            work.extend((op, candidate, case) for case in cases)
     return work
 
 
@@ -413,7 +511,14 @@ def cmd_fill(args: argparse.Namespace) -> None:
     args.device = _target_device(args)
     device = device_name(args.device)
     store = Store()
-    planned = _work(args.ops, args.backend, args.limit)
+    slice_spec = getattr(args, "slice", None)
+    if slice_spec is not None and args.limit is not None:
+        raise SystemExit("--slice names an exact axis context; --limit does not apply")
+    planned = (
+        _slice_work(args.ops, args.backend, slice_spec)
+        if slice_spec is not None
+        else _work(args.ops, args.backend, args.limit)
+    )
     work = [(op, impl, case) for op, impl, case in planned if available(impl)]
     if not work:
         raise SystemExit("no matching installed non-torch backend cases")
@@ -697,6 +802,12 @@ def main(prog: str = "python -m popcorn.bench") -> None:
     fill.add_argument("--in-process", action="store_true", help="run cases without a worker: no timeout, crashes end the run")
     fill.add_argument("--force", action="store_true", help="measure every combination, including ones already cached")
     fill.add_argument("--flush", type=_positive, default=50, help="write to the cache every N rows")
+    fill.add_argument(
+        "--slice",
+        nargs="+",
+        metavar="AXIS|NAME=JSON|+OPTIONAL",
+        help="fill missing production points along AXIS under one exact dtype/dim/arg/batch context",
+    )
     fill.add_argument(
         "--live",
         nargs="?",

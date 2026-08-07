@@ -21,6 +21,7 @@ from popcorn.bench.__main__ import (
     _isolated,
     _record_index,
     _require_clean,
+    _slice_work,
     _target_device,
     _usable_records,
     _work,
@@ -809,6 +810,30 @@ def test_work_uses_the_shared_plan_and_only_samples_when_limited():
     sampled = [case for _, _, case in _work([op.name], backend=backend, limit=4)]
     assert planned == case_plan(op).flatten()
     assert sampled == sample_cases(op, 4)
+
+
+def test_slice_work_expands_one_exact_context_over_its_production_axis():
+    op = popcorn.KERNELS["rms_norm"]
+    backend = next(name for name in op.available_backends() if name != "torch")
+    source = case_plan(op).flatten()[0]
+    axis = "normalized_shape"
+    fixed = {name: value for name, value in source.dims if name != axis}
+    spec = [
+        axis,
+        f"dtype={str(source.dtype).removeprefix('torch.')}",
+        *([f"...={json.dumps(source.batch)}"] if source.batch else []),
+        *(f"{name}={json.dumps(value)}" for name, value in sorted(fixed.items())),
+        *(f"{name}={json.dumps(value)}" for name, value in source.args),
+        *(f"+{name}" for name in sorted(source.present)),
+    ]
+
+    selected = [case for _, _, case in _slice_work([op.name], backend, spec)]
+
+    assert len(selected) > 1
+    assert all(case.batch == source.batch for case in selected)
+    assert all(case.dtype == source.dtype for case in selected)
+    assert all(case.args == source.args and case.present == source.present for case in selected)
+    assert all({name: value for name, value in case.dims if name != axis} == fixed for case in selected)
 
 
 def test_only_rebuilds_exactly_the_recorded_cases(tmp_path):

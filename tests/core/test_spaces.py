@@ -19,6 +19,7 @@ from popcorn.bench.grid import (
     grid_cases,
     ladder_cases,
     sample_cases,
+    slice_cases,
     smoke_cases,
 )
 from popcorn.bench.model import Case, Environment, Record, Result
@@ -318,6 +319,28 @@ class TestPlan:
         for case in ladder_cases(Dispatcher(reference)):
             dims = dict(case.dims)
             assert dims["q_heads"] % dims["kv_heads"] == 0
+
+    def test_slice_cases_keep_the_exact_context_and_omit_repairs_that_leave_it(self, monkeypatch):
+        from popcorn.core import dims as dims_mod
+
+        def reference(q: Float[Tensor, "... seq q_heads dim"], k: Float[Tensor, "... seq kv_heads dim"]):
+            return q + k.repeat_interleave(q.shape[-2] // k.shape[-2], -2)
+
+        monkeypatch.setitem(dims_mod.DIMS, "q_heads", {2, 4, 6, 8})
+        op = Dispatcher(reference)
+        context = Case(
+            (("dim", 16), ("kv_heads", 4), ("seq", 8)),
+            (2, 3),
+            torch.float16,
+            (),
+            frozenset(),
+        )
+
+        selected = slice_cases(op, "q_heads", context)
+
+        assert {dict(case.dims)["q_heads"] for case in selected} == {4, 8}
+        assert all(dict(case.dims)["kv_heads"] == 4 for case in selected)
+        assert all(case.batch == (2, 3) for case in selected)
 
     def test_grid_cases_union_covering_and_ladders_without_duplicates(self, monkeypatch):
         from popcorn.core import dims as dims_mod

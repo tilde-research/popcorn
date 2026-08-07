@@ -467,6 +467,54 @@ def ladder_cases(op: Any, profile: str = "production") -> list[Case]:
     return CasePlan(base).flatten()
 
 
+def slice_cases(op: Any, axis: str, context: Case, profile: str = "production") -> list[Case]:
+    """Vary one axis while preserving an exact measured context.
+
+    Repairs may change dimensions coupled to the requested axis. Those points belong to
+    another slice, so omit them instead of silently changing the user's fixed context.
+    """
+    dimensions = set(_dim_names(op))
+    if axis not in dimensions:
+        raise ValueError(f"{op.name}: slice axis {axis!r} is not one of {sorted(dimensions)}")
+    _profile_targets(profile)
+    if context.dtype not in _dtypes(op):
+        raise ValueError(f"{op.name}: dtype {context.dtype} is not part of its benchmark grid")
+    expected = dimensions - {axis, ELLIPSIS}
+    fixed = dict(context.dims)
+    if set(fixed) != expected:
+        missing = sorted(expected - fixed.keys())
+        extra = sorted(fixed.keys() - expected)
+        detail = ", ".join([*(f"missing {name}" for name in missing), *(f"unknown {name}" for name in extra)])
+        raise ValueError(f"{op.name}: invalid fixed slice dimensions ({detail})")
+    if axis == ELLIPSIS and context.batch:
+        raise ValueError(f"{op.name}: a leading-batch slice cannot also fix batch={context.batch}")
+
+    found: dict[str, Case] = {}
+    for value in _curve_values(axis, _dim_pool(op, axis), profile):
+        requested_values = fixed | {axis: value}
+        requested_args = dict(context.args)
+        repaired_values, repaired_args = dict(requested_values), dict(requested_args)
+        _repair(repaired_values, repaired_args)
+        if any(repaired_values.get(name) != fixed_value for name, fixed_value in fixed.items()):
+            continue
+        if repaired_args != requested_args:
+            continue
+        if axis == ELLIPSIS:
+            leading = repaired_values.pop(ELLIPSIS, 0)
+            batch = () if leading == 0 else (leading,)
+        else:
+            batch = context.batch
+        case = Case(
+            tuple(sorted(repaired_values.items())),
+            batch,
+            context.dtype,
+            tuple(sorted(repaired_args.items())),
+            context.present,
+        )
+        found.setdefault(case.case_id, case)
+    return list(found.values())
+
+
 def case_plan(op: Any) -> CasePlan:
     """Coverage breadth plus production and reduced-shape long-context curves."""
     return CasePlan(

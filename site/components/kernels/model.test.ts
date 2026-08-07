@@ -2,12 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Kernel, KernelCase, KernelCurve, KernelResult } from '../../lib/kernels.js';
 import {
+  closestMeasuredSlice,
   comparisonMode,
   curveKey,
   curveOptions,
   defaultCurveKey,
+  defaultSliceSelection,
+  filterSliceRows,
+  measuredSlices,
   normalizedSelection,
+  rowsForKernel,
   rowsForCurve,
+  selectionFromMeasuredSlice,
+  sliceControlsFor,
+  sliceFillCommand,
   xValue,
 } from './model.ts';
 
@@ -123,6 +131,71 @@ test('curve rows preserve measured head combinations and pass choice', () => {
   );
   assert.deepEqual(forward.map((row) => xValue(row, selected)), [128, 512, 2048]);
   assert.equal(rowsForCurve(item, selected, 'NVIDIA H100', 'backward').length, 1);
+});
+
+test('slice controls restore exact batch, argument, dimension, and pass filtering', () => {
+  const item = kernel('attention');
+  item.evidence.cases.d = {
+    ...case_('d', 128, 8, 2, [result('fast', true)]),
+    batch: [8],
+  };
+  item.evidence.cases.e = {
+    ...case_('e', 512, 8, 2, [result('fast', true)]),
+    batch: [8],
+  };
+  item.evidence.cases.f = {
+    ...case_('f', 2048, 8, 2, [result('fast', true)]),
+    batch: [8],
+    args: { causal: true },
+  };
+  item.evidence.cases.g = case_('g', 128, 16, 4);
+  item.evidence.cases.h = case_('h', 512, 16, 4);
+  item.evidence.cases.i = case_('i', 128, 32, 8);
+  item.evidence.cases.j = case_('j', 512, 32, 8);
+  const rows = rowsForKernel(item);
+  const controls = sliceControlsFor([item]);
+  const defaults = defaultSliceSelection([item], controls);
+
+  assert.deepEqual(controls.xOptions, ['seq', 'q_heads', 'kv_heads']);
+  assert.deepEqual(controls.batches, ['1', '8']);
+  assert.deepEqual(controls.args, [['causal', ['False', 'True']]]);
+  assert.equal(rows.length, 10);
+  assert.equal(defaults.dims.q_heads, 8);
+  assert.equal(defaults.args.causal, 'False');
+
+  const slices = measuredSlices(rows, defaults);
+  assert.equal(slices.length, 5);
+  assert.ok(slices.every((slice) => slice.points > 0));
+  const base = slices.find(
+    (slice) => slice.batch === '1' && slice.args.causal === 'False' && slice.dims.q_heads === 8,
+  );
+  assert.ok(base);
+  assert.deepEqual(base.batchValues, [1]);
+  assert.deepEqual(base.argValues, { causal: false });
+  assert.equal(
+    sliceFillCommand(item.name, defaults.x, defaults.dtype, base),
+    "popcorn bench fill attention --live --slice seq dtype=float32 '...=[1]' kv_heads=2 q_heads=8 causal=false",
+  );
+  const destination = closestMeasuredSlice(slices, defaults, {
+    kind: 'dim',
+    name: 'kv_heads',
+    value: 4,
+  });
+  assert.ok(destination);
+  const compatible = selectionFromMeasuredSlice(defaults, destination);
+  assert.equal(compatible.dims.kv_heads, 4);
+  assert.equal(compatible.dims.q_heads, 16);
+
+  const selected = {
+    ...defaults,
+    pass: 'backward' as const,
+    batch: '8',
+    args: { causal: 'False' },
+  };
+  assert.deepEqual(
+    filterSliceRows(rows, selected, controls).map((row) => row.case_id),
+    ['d', 'e'],
+  );
 });
 
 test('selection resets invalid metric, pass, device, and curve', () => {

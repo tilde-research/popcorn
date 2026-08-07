@@ -55,7 +55,7 @@ export function tokens(row: KernelRow): number {
 
 export type Pass = 'forward' | 'backward' | 'both';
 export const PASSES: Pass[] = ['forward', 'backward', 'both'];
-export type ExplorerMode = 'curves' | 'coverage';
+export type ExplorerMode = 'curves' | 'slices' | 'coverage';
 
 export function combine(pass: Pass, fwd: number | undefined, bwd: number | undefined, how: 'sum' | 'max'): number | null {
   if (pass === 'forward') return fwd ?? null;
@@ -177,6 +177,12 @@ function row(case_: KernelCase, result: KernelResult): KernelRow {
   };
 }
 
+export function rowsForKernel(kernel: Kernel): KernelRow[] {
+  return Object.values(kernel.evidence.cases).flatMap((case_) =>
+    case_.results.map((result) => row(case_, result)),
+  );
+}
+
 export function rowsForCurve(kernel: Kernel, curve: KernelCurve, device = '', pass: Pass = 'forward'): KernelRow[] {
   const requireGrad = pass !== 'forward';
   const candidates = curve.case_ids.flatMap((caseId) => {
@@ -208,6 +214,394 @@ export function rowsForSamples(kernel: Kernel, device = ''): KernelRow[] {
     if (!case_) return [];
     return case_.results.filter((result) => !device || result.device === device).map((result) => row(case_, result));
   });
+}
+
+export interface SliceControls {
+  xOptions: string[];
+  dims: [string, number[]][];
+  args: [string, string[]][];
+  fixed: [string, number][];
+  dimDefaults: Record<string, number>;
+  argDefaults: Record<string, string>;
+  dtypes: string[];
+  devices: string[];
+  presents: string[];
+  batches: string[];
+}
+
+export interface SliceSelection {
+  x: string;
+  metric: string;
+  pass: Pass;
+  dtype: string;
+  device: string;
+  present: string;
+  batch: string;
+  dims: Record<string, number>;
+  args: Record<string, string>;
+}
+
+export interface MeasuredSlice {
+  key: string;
+  dims: Record<string, number>;
+  batch: string;
+  batchValues: number[];
+  args: Record<string, string>;
+  argValues: Record<string, unknown>;
+  present: string;
+  presentValues: string[];
+  points: number;
+  results: number;
+}
+
+export type SliceAnchor =
+  | { kind: 'dim'; name: string; value: number }
+  | { kind: 'arg'; name: string; value: string }
+  | { kind: 'batch' | 'present'; value: string };
+
+const distinct = <T,>(values: T[]): T[] => [...new Set(values)];
+const presentKey = (row: KernelRow): string => row.present.join('+') || 'none';
+const batchKey = (row: KernelRow): string => row.batch.join('x') || 'none';
+
+function mode<T>(values: T[]): T | undefined {
+  const counts = new Map<T, number>();
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+  return [...counts].sort((left, right) => right[1] - left[1])[0]?.[0];
+}
+
+export function sliceControlsFor(kernels: Kernel[]): SliceControls {
+  const rowSets = kernels.map(rowsForKernel);
+  const all = rowSets.flat();
+  const dims = new Map<string, number[]>();
+  for (const row of all) {
+    for (const [name, value] of Object.entries(row.dims)) {
+      const pool = dims.get(name) ?? [];
+      if (!pool.includes(value)) pool.push(value);
+      dims.set(name, pool);
+    }
+  }
+  for (const pool of dims.values()) pool.sort((left, right) => left - right);
+
+  const multiValued = (rows: KernelRow[]) => {
+    const seen = new Map<string, Set<number>>();
+    for (const row of rows) {
+      for (const [name, value] of Object.entries(row.dims)) {
+        const values = seen.get(name) ?? new Set<number>();
+        values.add(value);
+        seen.set(name, values);
+      }
+    }
+    return new Set([...seen].filter(([, values]) => values.size > 1).map(([name]) => name));
+  };
+  const xOptions = [...dims.keys()].filter((name) => rowSets.every((rows) => multiValued(rows).has(name)));
+  const argKeys = distinct(all.flatMap((row) => Object.keys(row.args)));
+  const args: [string, string[]][] = argKeys
+    .map((key): [string, string[]] => [
+      key,
+      distinct(all.filter((row) => key in row.args).map((row) => fmt(row.args[key]))).sort(),
+    ])
+    .filter(([, values]) => values.length > 1);
+  const dimDefaults: Record<string, number> = {};
+  for (const [name, pool] of dims) {
+    if (pool.length > 1) {
+      dimDefaults[name] = mode(all.filter((row) => name in row.dims).map((row) => row.dims[name])) ?? pool[0];
+    }
+  }
+  const argDefaults: Record<string, string> = {};
+  for (const [key, values] of args) {
+    argDefaults[key] = mode(all.filter((row) => key in row.args).map((row) => fmt(row.args[key]))) ?? values[0];
+  }
+  return {
+    xOptions,
+    dims: [...dims.entries()],
+    args,
+    fixed: [...dims.entries()]
+      .filter(([, pool]) => pool.length === 1)
+      .map(([name, pool]): [string, number] => [name, pool[0]]),
+    dimDefaults,
+    argDefaults,
+    dtypes: distinct(all.map((row) => row.dtype)).sort(),
+    devices: distinct(all.map((row) => row.device)).sort(),
+    presents: distinct(all.map(presentKey)).sort(),
+    batches: distinct(all.map(batchKey)).sort((left, right) =>
+      left.localeCompare(right, undefined, { numeric: true }),
+    ),
+  };
+}
+
+export function defaultSliceSelection(kernels: Kernel[], controls: SliceControls): SliceSelection {
+  const all = kernels.flatMap(rowsForKernel);
+  const seqish = ['seq', 'total', 'tokens', 'response', 'hidden'].find((name) => controls.xOptions.includes(name));
+  const selection: SliceSelection = {
+    x: seqish ?? controls.xOptions[0] ?? '',
+    metric: 'latency',
+    pass: 'forward',
+    dtype: mode(all.map((row) => row.dtype)) ?? controls.dtypes[0] ?? '',
+    device: mode(all.map((row) => row.device)) ?? controls.devices[0] ?? '',
+    present: mode(all.map(presentKey)) ?? controls.presents[0] ?? 'none',
+    batch: mode(all.map(batchKey)) ?? controls.batches[0] ?? 'none',
+    dims: {},
+    args: {},
+  };
+  const preferred = selectionForSliceAxis(kernels, selection, selection.x, selection.dtype);
+  const choices = measuredSlices(all, preferred);
+  const closest = closestMeasuredSlice(choices, preferred);
+  return closest ? selectionFromMeasuredSlice(preferred, closest) : preferred;
+}
+
+export function selectionForSliceAxis(
+  kernels: Kernel[],
+  selection: SliceSelection,
+  axis: string,
+  dtype = selection.dtype,
+): SliceSelection {
+  const shared = curveOptions(kernels)
+    .filter((option) => option.axis === axis && option.dtype === dtype)
+    .map((option) => curveFor(kernels[0], option.key))
+    .filter((curve): curve is KernelCurve => curve !== undefined);
+  const candidates =
+    shared.length > 0
+      ? shared
+      : (kernels[0]?.evidence.curves.filter((curve) => curve.axis === axis && curve.dtype === dtype) ?? []);
+  const curve = [...candidates].sort((left, right) => {
+    const score = (candidate: KernelCurve) => [
+      candidate.profile === 'production' ? 1 : 0,
+      candidate.variant === 'base' ? 1 : 0,
+      candidate.case_ids.length,
+    ];
+    const leftScore = score(left);
+    const rightScore = score(right);
+    for (let index = 0; index < leftScore.length; index++) {
+      if (leftScore[index] !== rightScore[index]) return rightScore[index] - leftScore[index];
+    }
+    return left.id.localeCompare(right.id);
+  })[0];
+  if (!curve) return { ...selection, x: axis, dtype };
+  return {
+    ...selection,
+    x: axis,
+    dtype,
+    batch: curve.fixed.batch === null ? selection.batch : curve.fixed.batch.join('x') || 'none',
+    present: curve.fixed.present.join('+') || 'none',
+    dims: { ...curve.fixed.dims },
+    args: Object.fromEntries(Object.entries(curve.fixed.args).map(([name, value]) => [name, fmt(value)])),
+  };
+}
+
+function measuredSliceKey(
+  dims: Record<string, number>,
+  batch: string,
+  args: Record<string, string>,
+  present: string,
+): string {
+  return JSON.stringify([
+    Object.entries(dims).sort(([left], [right]) => left.localeCompare(right)),
+    batch,
+    Object.entries(args).sort(([left], [right]) => left.localeCompare(right)),
+    present,
+  ]);
+}
+
+export function measuredSlices(rows: KernelRow[], selection: SliceSelection): MeasuredSlice[] {
+  const metric = METRICS.find((candidate) => candidate.id === selection.metric);
+  if (!metric || !selection.x) return [];
+  const groups = new Map<
+    string,
+    Omit<MeasuredSlice, 'points' | 'results'> & { xs: Set<number>; resultKeys: Set<string> }
+  >();
+  for (const row of rows) {
+    const x = row.dims[selection.x];
+    if (
+      x === undefined ||
+      row.status !== 'pass' ||
+      row.dtype !== selection.dtype ||
+      row.device !== selection.device ||
+      (selection.pass !== 'forward' && !row.grad) ||
+      metric.value(row, selection.pass) === null
+    ) {
+      continue;
+    }
+    const dims = Object.fromEntries(
+      Object.entries(row.dims)
+        .filter(([name]) => name !== selection.x)
+        .sort(([left], [right]) => left.localeCompare(right)),
+    );
+    const args = Object.fromEntries(
+      Object.entries(row.args)
+        .map(([name, value]): [string, string] => [name, fmt(value)])
+        .sort(([left], [right]) => left.localeCompare(right)),
+    );
+    const argValues = Object.fromEntries(
+      Object.entries(row.args).sort(([left], [right]) => left.localeCompare(right)),
+    );
+    const batch = batchKey(row);
+    const present = presentKey(row);
+    const key = measuredSliceKey(dims, batch, args, present);
+    const group = groups.get(key) ?? {
+      key,
+      dims,
+      batch,
+      batchValues: [...row.batch],
+      args,
+      argValues,
+      present,
+      presentValues: [...row.present],
+      xs: new Set<number>(),
+      resultKeys: new Set<string>(),
+    };
+    group.xs.add(x);
+    group.resultKeys.add(`${row.case_id}|${row.impl}`);
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .map(({ xs, resultKeys, ...slice }) => ({
+      ...slice,
+      points: xs.size,
+      results: resultKeys.size,
+    }))
+    .sort(
+      (left, right) =>
+        right.points - left.points || right.results - left.results || left.key.localeCompare(right.key),
+    );
+}
+
+function numericDistance(left: number, right: number): number {
+  if (left === right) return 0;
+  if (left > 0 && right > 0) return Math.abs(Math.log2(left / right));
+  return Math.abs(left - right);
+}
+
+function anchorMatches(slice: MeasuredSlice, anchor: SliceAnchor): boolean {
+  if (anchor.kind === 'dim') return slice.dims[anchor.name] === anchor.value;
+  if (anchor.kind === 'arg') return slice.args[anchor.name] === anchor.value;
+  return slice[anchor.kind] === anchor.value;
+}
+
+function sliceDistance(slice: MeasuredSlice, selection: SliceSelection, anchor?: SliceAnchor): number {
+  let distance = 0;
+  for (const [name, value] of Object.entries(slice.dims)) {
+    if (anchor?.kind === 'dim' && anchor.name === name) continue;
+    const current = selection.dims[name];
+    if (current !== undefined) distance += numericDistance(value, current);
+  }
+  for (const [name, value] of Object.entries(slice.args)) {
+    if (anchor?.kind === 'arg' && anchor.name === name) continue;
+    const current = selection.args[name];
+    if (current !== undefined && current !== value) distance += 1;
+  }
+  if (anchor?.kind !== 'batch' && slice.batch !== selection.batch) distance += 1;
+  if (anchor?.kind !== 'present' && slice.present !== selection.present) distance += 1;
+  return distance;
+}
+
+export function closestMeasuredSlice(
+  slices: MeasuredSlice[],
+  selection: SliceSelection,
+  anchor?: SliceAnchor,
+): MeasuredSlice | undefined {
+  const candidates = anchor ? slices.filter((slice) => anchorMatches(slice, anchor)) : slices;
+  return [...candidates].sort((left, right) => {
+    const distance = sliceDistance(left, selection, anchor) - sliceDistance(right, selection, anchor);
+    return distance || right.points - left.points || right.results - left.results || left.key.localeCompare(right.key);
+  })[0];
+}
+
+export function selectionFromMeasuredSlice(
+  selection: SliceSelection,
+  slice: MeasuredSlice,
+): SliceSelection {
+  return {
+    ...selection,
+    dims: { ...slice.dims },
+    batch: slice.batch,
+    args: { ...slice.args },
+    present: slice.present,
+  };
+}
+
+export function measuredSliceLabel(slice: MeasuredSlice): string {
+  const context = [
+    ...(slice.batch === 'none' ? [] : [`batch=${slice.batch}`]),
+    ...Object.entries(slice.dims).map(([name, value]) => `${name}=${value}`),
+    ...Object.entries(slice.args).map(([name, value]) => `${name}=${value}`),
+    ...(slice.present === 'none' ? [] : [`+${slice.present.replaceAll('+', ',+')}`]),
+  ];
+  return `${slice.points} ${slice.points === 1 ? 'point' : 'points'} · ${context.join(' · ') || 'default context'}`;
+}
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+export function sliceFillCommand(kernel: string, axis: string, dtype: string, slice: MeasuredSlice): string {
+  const context = [
+    `dtype=${dtype}`,
+    ...(slice.batchValues.length > 0 ? [`...=${JSON.stringify(slice.batchValues)}`] : []),
+    ...Object.entries(slice.dims)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => `${name}=${JSON.stringify(value)}`),
+    ...Object.entries(slice.argValues)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => `${name}=${JSON.stringify(value)}`),
+    ...[...slice.presentValues].sort().map((name) => `+${name}`),
+  ];
+  return ['popcorn', 'bench', 'fill', kernel, '--live', '--slice', axis, ...context]
+    .map(shellQuote)
+    .join(' ');
+}
+
+function snap(target: number, pool: number[]): number {
+  let best = pool[0];
+  for (const value of pool) {
+    if (Math.abs(Math.log(value) - Math.log(target)) < Math.abs(Math.log(best) - Math.log(target))) {
+      best = value;
+    }
+  }
+  return best;
+}
+
+export function filterSliceRows(
+  rows: KernelRow[],
+  selection: SliceSelection,
+  controls: SliceControls,
+): KernelRow[] {
+  const pools = new Map<string, number[]>();
+  for (const row of rows) {
+    for (const [name, value] of Object.entries(row.dims)) {
+      const pool = pools.get(name) ?? [];
+      if (!pool.includes(value)) pool.push(value);
+      pools.set(name, pool);
+    }
+  }
+  const wanted = new Map<string, number>();
+  for (const [name, pool] of pools) {
+    if (name === selection.x || pool.length === 1) continue;
+    wanted.set(name, snap(selection.dims[name] ?? controls.dimDefaults[name] ?? pool[0], pool));
+  }
+  const requireGrad = selection.pass !== 'forward';
+  const candidates = rows.filter(
+    (row) =>
+      row.status === 'pass' &&
+      row.dtype === selection.dtype &&
+      (!selection.device || row.device === selection.device) &&
+      presentKey(row) === selection.present &&
+      batchKey(row) === selection.batch &&
+      (!requireGrad || row.grad) &&
+      [...wanted].every(([name, value]) => row.dims[name] === value) &&
+      Object.entries(row.args).every(
+        ([key, value]) => (selection.args[key] ?? controls.argDefaults[key] ?? fmt(value)) === fmt(value),
+      ),
+  );
+  const chosen = new Map<string, KernelRow>();
+  for (const candidate of candidates) {
+    const key = `${candidate.case_id}|${candidate.impl}|${candidate.device}`;
+    const current = chosen.get(key);
+    if (!current || (selection.pass === 'forward' ? !candidate.grad && current.grad : candidate.grad && !current.grad)) {
+      chosen.set(key, candidate);
+    }
+  }
+  return [...chosen.values()];
 }
 
 export function devicesFor(kernels: Kernel[], key: string): string[] {

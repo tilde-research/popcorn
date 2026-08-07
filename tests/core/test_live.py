@@ -189,6 +189,36 @@ def test_fill_live_cli_parses_default_and_custom_ports(monkeypatch, arguments, p
     assert parsed[0].live == port
 
 
+def test_fill_live_cli_parses_a_website_slice_after_the_live_flag(monkeypatch):
+    parsed = []
+    monkeypatch.setitem(main.__globals__, "cmd_fill", parsed.append)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "python -m popcorn.bench",
+            "fill",
+            "rms_norm",
+            "--live",
+            "--slice",
+            "normalized_shape",
+            "dtype=float16",
+            "...=[2,3]",
+            "eps=0.000001",
+        ],
+    )
+
+    main()
+
+    assert parsed[0].live == 8765
+    assert parsed[0].slice == [
+        "normalized_shape",
+        "dtype=float16",
+        "...=[2,3]",
+        "eps=0.000001",
+    ]
+
+
 def test_live_replay_is_bounded_and_error_state_is_retained():
     live = LiveServer(0, device="Test GPU", ops=["alpha"], total=3, replay=2)
     for index in range(3):

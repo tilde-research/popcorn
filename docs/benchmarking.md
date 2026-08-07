@@ -79,9 +79,20 @@ popcorn bench fill rms_norm --live
 ```
 
 Open `rms_norm` in the [kernel explorer](https://tilde-research.github.io/popcorn/kernels),
-select the **Local** tab, and press **Check**. The browser may ask for permission to connect
-to loopback. The tab verifies that port 8765 is Popcorn, then shows this session's progress
-and recent results. It does not replace or modify the published plots.
+and the page checks the remembered port automatically. The browser may ask for permission to
+connect to loopback. The local benchmark status opens the connection details, and streamed
+rows appear as highlighted points on the corresponding plots.
+
+In the **Slices** view, **Add data** generates a command for the selected slice:
+
+```bash
+popcorn bench fill rms_norm --live --slice normalized_shape dtype=float16 '...=[8]' eps=0.000001
+```
+
+The slice form varies only the named x axis over its production pool while preserving the
+displayed dtype, batch, dimensions, scalar arguments, and optional inputs. It skips rows already
+cached on the current device. If a validity repair would change one of those fixed values, that
+point belongs to another slice and is omitted rather than silently changing the requested context.
 
 Use the same custom port on both sides when 8765 is unavailable:
 

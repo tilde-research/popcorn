@@ -1,32 +1,43 @@
 'use client';
 
 import type { Kernel, KernelCurve, KernelRow } from '@/lib/kernels';
-import { liveRowsForCurve, type LiveRow } from '@/lib/live-bench';
+import { liveKernelRow, liveRowsForCurve, type LiveRow } from '@/lib/live-bench';
 import dynamic from 'next/dynamic';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   DASHES,
   METRICS,
   PASSES,
   backendColor,
   caseLabel,
+  closestMeasuredSlice,
   comparisonMode,
   contextLabel,
   curveFor,
   curveOptions,
   curveStats,
+  defaultSliceSelection,
   defaultSelection,
   devicesFor,
+  filterSliceRows,
   frontiersFor,
   hardwareLabel,
+  measuredSliceLabel,
+  measuredSlices,
   normalizedSelection,
+  rowsForKernel,
   rowsForCurve,
   rowsForSamples,
+  selectionFromMeasuredSlice,
+  sliceControlsFor,
+  sliceFillCommand,
   tokens,
   xValue,
   type Metric,
   type Pass,
   type Selection,
+  type SliceAnchor,
+  type SliceSelection,
 } from './model';
 
 const PlotFrame = dynamic(() => import('./plot-frame').then((module) => module.PlotFrame), {
@@ -38,11 +49,13 @@ function Segmented({
   options,
   value,
   onChange,
+  disabled = [],
   labels = {},
 }: {
   options: string[];
   value: string;
   onChange: (next: string) => void;
+  disabled?: string[];
   labels?: Record<string, string>;
 }) {
   return (
@@ -51,9 +64,10 @@ function Segmented({
         <button
           type="button"
           key={option}
+          disabled={disabled.includes(option)}
           aria-pressed={option === value}
           onClick={() => onChange(option)}
-          className={`shrink-0 px-2.5 py-1 transition-colors ${
+          className={`shrink-0 px-2.5 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
             option === value ? 'bg-fd-primary text-fd-primary-foreground' : 'bg-fd-card hover:bg-fd-accent'
           }`}
         >
@@ -70,12 +84,14 @@ function Select({
   options,
   onChange,
   labels = {},
+  wide = false,
 }: {
   label: string;
   value: string;
   options: string[];
   onChange: (next: string) => void;
   labels?: Record<string, string>;
+  wide?: boolean;
 }) {
   if (options.length < 2) return null;
   return (
@@ -85,7 +101,9 @@ function Select({
         aria-label={label}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="min-w-0 max-w-52 rounded-lg border bg-fd-card px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-fd-ring"
+        className={`min-w-0 rounded-lg border bg-fd-card px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-fd-ring ${
+          wide ? 'max-w-[32rem]' : 'max-w-52'
+        }`}
       >
         {options.map((option) => (
           <option key={option} value={option}>
@@ -101,6 +119,9 @@ const median = (values: number[]): number => {
   const sorted = [...values].sort((left, right) => left - right);
   return sorted[Math.floor(sorted.length / 2)];
 };
+
+const passLabel = (pass: Pass): string =>
+  ({ forward: 'forward', backward: 'backward', both: 'forward + backward' })[pass];
 
 function referenceValue(row: KernelRow, metric: Metric, pass: Pass): number | null {
   const combine = (fwd: number | undefined, bwd: number | undefined, how: 'sum' | 'max') => {
@@ -128,7 +149,7 @@ function CurveChart({
     liveRows: KernelRow[];
     liveRevision: number;
   }[];
-  selection: Selection;
+  selection: { pass: Pass; device: string };
   metric: Metric;
 }) {
   const traces: unknown[] = [];
@@ -142,7 +163,10 @@ function CurveChart({
       multi ? `${item.kernel.name} · local · ${impl}` : `local · ${impl}`;
     const dash = DASHES[position % DASHES.length];
     const addImplementations = (rows: KernelRow[], local: boolean) => {
-      const impls = [...new Set(rows.map((row) => row.impl))].sort();
+      const hasSyntheticReference = ['latency', 'throughput', 'memory'].includes(metric.id);
+      const impls = [...new Set(rows.map((row) => row.impl))]
+        .filter((impl) => impl !== 'torch' || !hasSyntheticReference)
+        .sort();
       for (const impl of impls) {
         const points = rows
           .filter((row) => row.impl === impl)
@@ -168,7 +192,7 @@ function CurveChart({
                 legendgrouptitle: { text: multi ? `Local · ${item.kernel.name}` : 'Local' },
               }
             : {}),
-          hovertemplate: `${name}<br>${item.curve.axis}=%{x}<br>%{y:.4g} ${metric.unit}<extra></extra>`,
+          hovertemplate: `${name}<br>${item.curve.axis}=%{x}<br>${passLabel(selection.pass)}: %{y:.4g} ${metric.unit}<extra></extra>`,
         });
       }
     };
@@ -198,7 +222,7 @@ function CurveChart({
               legendgrouptitle: { text: multi ? `Local · ${item.kernel.name}` : 'Local' },
             }
           : {}),
-        hovertemplate: `${name}<br>${item.curve.axis}=%{x}<br>%{y:.4g} ${metric.unit}<extra></extra>`,
+        hovertemplate: `${name}<br>${item.curve.axis}=%{x}<br>${passLabel(selection.pass)}: %{y:.4g} ${metric.unit}<extra></extra>`,
       });
     };
 
@@ -217,7 +241,12 @@ function CurveChart({
     <PlotFrame
       data={traces}
       layout={{
-        datarevision: items.map((item) => `${item.kernel.name}:${item.liveRevision}`).join('|'),
+        datarevision: [
+          selection.pass,
+          selection.device,
+          metric.id,
+          ...items.map((item) => `${item.kernel.name}:${item.curve.id}:${item.liveRevision}`),
+        ].join('|'),
         xaxis: {
           title: { text: axis === '...' ? 'batch' : axis },
           type: logX ? 'log' : 'linear',
@@ -225,7 +254,7 @@ function CurveChart({
           gridcolor: 'rgba(128,128,128,0.2)',
         },
         yaxis: {
-          title: { text: metric.unit },
+          title: { text: `${passLabel(selection.pass)} ${metric.id} (${metric.unit})` },
           type: logY ? 'log' : 'linear',
           ...(logY ? ticks : { rangemode: 'tozero' }),
           gridcolor: 'rgba(128,128,128,0.2)',
@@ -267,6 +296,256 @@ function CurveContext({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function SliceExplorer({
+  kernels,
+  liveRows,
+}: {
+  kernels: Kernel[];
+  liveRows: Record<string, LiveRow[]>;
+}) {
+  const kernelKey = kernels.map((kernel) => `${kernel.name}:${kernel.evidence.freshness.latest}`).join('|');
+  const controls = useMemo(() => sliceControlsFor(kernels), [kernels]);
+  const published = useMemo(
+    () => new Map(kernels.map((kernel) => [kernel.name, rowsForKernel(kernel)])),
+    [kernels],
+  );
+  const allRows = useMemo(() => [...published.values()].flat(), [published]);
+  const defaults = useMemo(() => defaultSliceSelection(kernels, controls), [kernels, controls]);
+  const [selection, setSelection] = useState<SliceSelection>(() => defaults);
+
+  useEffect(() => {
+    setSelection(defaults);
+  }, [kernelKey, defaults]);
+
+  const valid = <T,>(value: T, pool: T[], fallback: T): T => (pool.includes(value) ? value : fallback);
+  const tentative: SliceSelection = {
+    ...defaults,
+    ...selection,
+    x: valid(selection.x, controls.xOptions, defaults.x),
+    metric: valid(selection.metric, METRICS.map((metric) => metric.id), defaults.metric),
+    pass: valid(selection.pass, PASSES, defaults.pass) as Pass,
+    dtype: valid(selection.dtype, controls.dtypes, defaults.dtype),
+    device: valid(selection.device, controls.devices, defaults.device),
+  };
+  const requestedSlices = measuredSlices(allRows, tentative);
+  const slices = requestedSlices.length > 0 ? requestedSlices : measuredSlices(allRows, defaults);
+  const basis = requestedSlices.length > 0 ? tentative : defaults;
+  const currentSlice = closestMeasuredSlice(slices, basis);
+  const selected = currentSlice ? selectionFromMeasuredSlice(basis, currentSlice) : basis;
+  const metric = METRICS.find((candidate) => candidate.id === selected.metric) ?? METRICS[0];
+  const hasSlices = (next: Partial<SliceSelection>) =>
+    measuredSlices(allRows, { ...selected, ...next }).length > 0;
+  const axisOptions = controls.xOptions.filter((x) => hasSlices({ x }));
+  const dtypeOptions = controls.dtypes.filter((dtype) => hasSlices({ dtype }));
+  const deviceOptions = controls.devices.filter((device) => hasSlices({ device }));
+  const metricOptions = METRICS.filter((candidate) => hasSlices({ metric: candidate.id }));
+  const passOptions = PASSES.filter((pass) => hasSlices({ pass }));
+  const navigate = (next: Partial<SliceSelection>, anchor?: SliceAnchor) => {
+    const desired = { ...selected, ...next };
+    const destination = closestMeasuredSlice(measuredSlices(allRows, desired), desired, anchor);
+    if (destination) setSelection(selectionFromMeasuredSlice(desired, destination));
+  };
+
+  const dimensionPools = new Map<string, number[]>();
+  const argumentPools = new Map<string, string[]>();
+  for (const slice of slices) {
+    for (const [name, value] of Object.entries(slice.dims)) {
+      const values = dimensionPools.get(name) ?? [];
+      if (!values.includes(value)) values.push(value);
+      dimensionPools.set(name, values);
+    }
+    for (const [name, value] of Object.entries(slice.args)) {
+      const values = argumentPools.get(name) ?? [];
+      if (!values.includes(value)) values.push(value);
+      argumentPools.set(name, values);
+    }
+  }
+  for (const values of dimensionPools.values()) values.sort((left, right) => left - right);
+  for (const values of argumentPools.values()) {
+    values.sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+  }
+  const dimensionOrder = new Map(controls.dims.map(([name], index) => [name, index]));
+  const dimensions = [...dimensionPools].sort(
+    ([left], [right]) => (dimensionOrder.get(left) ?? 999) - (dimensionOrder.get(right) ?? 999),
+  );
+  const arguments_ = [...argumentPools];
+  const batches = [...new Set(slices.map((slice) => slice.batch))].sort((left, right) =>
+    left.localeCompare(right, undefined, { numeric: true }),
+  );
+  const presents = [...new Set(slices.map((slice) => slice.present))].sort();
+  const fixed = [
+    ...dimensions.filter(([, values]) => values.length === 1).map(([name, values]) => `${name}=${values[0]}`),
+    ...arguments_.filter(([, values]) => values.length === 1).map(([name, values]) => `${name}=${values[0]}`),
+    ...(batches.length === 1 && batches[0] !== 'none' ? [`batch=${batches[0]}`] : []),
+    ...(presents.length === 1 && presents[0] !== 'none' ? [`+${presents[0].replaceAll('+', ',+')}`] : []),
+  ];
+  const curve: KernelCurve = {
+    id: `slice:${selected.x}:${selected.dtype}:${JSON.stringify([
+      selected.batch,
+      selected.present,
+      selected.dims,
+      selected.args,
+    ])}`,
+    profile: 'slice',
+    axis: selected.x,
+    dtype: selected.dtype,
+    variant: 'slice',
+    fixed: { dims: {}, batch: null, args: {}, present: [] },
+    case_ids: [],
+  };
+  const items = kernels.map((kernel) => {
+    const streamed = liveRows[kernel.name] ?? [];
+    return {
+      kernel,
+      curve,
+      rows: filterSliceRows(published.get(kernel.name) ?? [], selected, controls),
+      liveRows: filterSliceRows(
+        streamed.map(({ record }) => liveKernelRow(record)),
+        { ...selected, device: '' },
+        controls,
+      ),
+      liveRevision: streamed[streamed.length - 1]?.sequence ?? 0,
+    };
+  });
+  const fillCommands = currentSlice
+    ? kernels.flatMap((kernel) => {
+        const exact = measuredSlices(published.get(kernel.name) ?? [], selected).find(
+          (slice) => slice.key === currentSlice.key,
+        );
+        return exact
+          ? [{ kernel: kernel.name, command: sliceFillCommand(kernel.name, selected.x, selected.dtype, exact) }]
+          : [];
+      })
+    : [];
+
+  if (allRows.length === 0) return <Empty message="No recorded benchmarks yet." />;
+  if (controls.xOptions.length === 0) {
+    return <Empty message="This selection has no measured dimension with enough values to form a slice." />;
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="flex shrink-0 flex-wrap items-center gap-3">
+        <Select
+          label="x axis"
+          value={selected.x}
+          options={axisOptions}
+          onChange={(x) => navigate({ x })}
+        />
+        <Select
+          label="dtype"
+          value={selected.dtype}
+          options={dtypeOptions}
+          onChange={(dtype) => navigate({ dtype })}
+        />
+        <Select
+          label="hardware"
+          value={selected.device}
+          options={deviceOptions}
+          labels={Object.fromEntries(deviceOptions.map((device) => [device, hardwareLabel(device)]))}
+          onChange={(device) => navigate({ device })}
+        />
+        <Select
+          label="metric"
+          value={metric.id}
+          options={metricOptions.map((candidate) => candidate.id)}
+          onChange={(nextMetric) => navigate({ metric: nextMetric })}
+        />
+        <Segmented
+          options={PASSES}
+          disabled={PASSES.filter((pass) => !passOptions.includes(pass))}
+          value={selected.pass}
+          onChange={(pass) => navigate({ pass: pass as Pass })}
+        />
+      </div>
+
+      <div className="min-h-64 min-w-0 flex-1">
+        <CurveChart items={items} selection={selected} metric={metric} />
+      </div>
+
+      <div className="flex max-h-[45%] shrink-0 flex-col gap-3 overflow-y-auto border-t pt-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <Select
+            label={`all measured slices (${slices.length})`}
+            value={currentSlice?.key ?? ''}
+            options={slices.map((slice) => slice.key)}
+            labels={Object.fromEntries(slices.map((slice) => [slice.key, measuredSliceLabel(slice)]))}
+            onChange={(key) => {
+              const slice = slices.find((candidate) => candidate.key === key);
+              if (slice) setSelection(selectionFromMeasuredSlice(selected, slice));
+            }}
+            wide
+          />
+          {arguments_
+            .filter(([, values]) => values.length > 1)
+            .map(([key, values]) => (
+              <Select
+                key={key}
+                label={key}
+                value={selected.args[key]}
+                options={values}
+                onChange={(value) => navigate({}, { kind: 'arg', name: key, value })}
+              />
+            ))}
+          <Select
+            label="optionals"
+            value={selected.present}
+            options={presents}
+            onChange={(value) => navigate({}, { kind: 'present', value })}
+          />
+          <Select
+            label="batch"
+            value={selected.batch}
+            options={batches}
+            onChange={(value) => navigate({}, { kind: 'batch', value })}
+          />
+          {fillCommands.length > 0 && <AddSliceData commands={fillCommands} />}
+        </div>
+        <p className="text-[11px] text-fd-muted-foreground">
+          Every choice moves to the nearest compatible measured slice; the selector above lists all{' '}
+          {slices.length}.
+        </p>
+        {fixed.length > 0 && (
+          <p className="font-mono text-[11px] text-fd-muted-foreground">
+            fixed: {fixed.join(' · ')}
+          </p>
+        )}
+        <div className="grid grid-cols-1 gap-x-8 gap-y-1.5 sm:grid-cols-2">
+          {dimensions
+            .filter(([, values]) => values.length > 1)
+            .map(([name, values]) => {
+              const current = selected.dims[name];
+              const index = Math.max(0, values.indexOf(current));
+              return (
+                <label key={name} className="flex items-center gap-3 text-xs">
+                  <span className="w-28 shrink-0 truncate font-mono text-fd-muted-foreground">{name}</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={values.length - 1}
+                    value={index}
+                    onChange={(event) =>
+                      navigate(
+                        {},
+                        {
+                          kind: 'dim',
+                          name,
+                          value: values[Number(event.target.value)],
+                        },
+                      )
+                    }
+                    className="flex-1 accent-fd-primary"
+                  />
+                  <span className="w-14 shrink-0 text-right font-mono">{current}</span>
+                </label>
+              );
+            })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -361,30 +640,38 @@ export function PlotPane({
   const hasBackward = allRows.some((row) => row.bwd_ms !== undefined);
   const compare = comparisonMode(kernels, normalized.curve);
 
-  const choose = (field: 'profile' | 'axis' | 'dtype' | 'variant', value: string) => {
+  const optionFields = ['profile', 'axis', 'dtype', 'variant'] as const;
+  const choose = (field: (typeof optionFields)[number], value: string) => {
     const current = option;
-    const matches = options.filter((candidate) => candidate[field] === value);
-    const next =
-      matches.find(
-        (candidate) =>
-          candidate.profile === (field === 'profile' ? value : current?.profile) &&
-          candidate.axis === (field === 'axis' ? value : current?.axis) &&
-          candidate.dtype === (field === 'dtype' ? value : current?.dtype) &&
-          candidate.variant === (field === 'variant' ? value : current?.variant),
-      ) ?? matches[0];
+    if (!current) return;
+    const next = options.find(
+      (candidate) =>
+        candidate[field] === value &&
+        optionFields.every((other) => other === field || candidate[other] === current[other]),
+    );
     if (next) setSelection((state) => ({ ...state, curve: next.key, device: devicesFor(kernels, next.key)[0] ?? '' }));
   };
 
-  const values = <K extends keyof Pick<(typeof options)[number], 'profile' | 'axis' | 'dtype' | 'variant'>>(field: K) =>
-    [...new Set(options.map((item) => item[field]))];
+  const values = (field: (typeof optionFields)[number]) => {
+    if (!option) return [];
+    return [
+      ...new Set(
+        options
+          .filter((candidate) =>
+            optionFields.every((other) => other === field || candidate[other] === option[other]),
+          )
+          .map((candidate) => candidate[field]),
+      ),
+    ];
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="flex shrink-0 flex-wrap items-center gap-3">
         <Segmented
-          options={['curves', 'coverage']}
+          options={['curves', 'slices', 'coverage']}
           value={normalized.mode}
-          labels={{ curves: 'Curves', coverage: 'Coverage' }}
+          labels={{ curves: 'Curves', slices: 'Slices', coverage: 'Coverage' }}
           onChange={(mode) => setSelection((state) => ({ ...state, mode: mode as Selection['mode'] }))}
         />
         {normalized.mode === 'curves' && (
@@ -427,6 +714,8 @@ export function PlotPane({
           device={normalized.device}
           onDevice={(device) => setSelection((state) => ({ ...state, device }))}
         />
+      ) : normalized.mode === 'slices' ? (
+        <SliceExplorer kernels={kernels} liveRows={liveRows} />
       ) : options.length === 0 ? (
         <Empty message="No curve has the same measured context and hardware across these kernels. Compare their coverage samples or select one kernel." />
       ) : (
@@ -462,6 +751,116 @@ export function PlotPane({
         </>
       )}
     </div>
+  );
+}
+
+function AddSliceData({ commands }: { commands: { kernel: string; command: string }[] }) {
+  const [open, setOpen] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'selected' | 'failed'>('idle');
+  const panel = useRef<HTMLDivElement>(null);
+  const commandBlock = useRef<HTMLDivElement>(null);
+  const text = commands.map(({ command }) => command).join('\n');
+
+  useEffect(() => {
+    setCopyState('idle');
+  }, [text]);
+
+  useEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(() => panel.current?.scrollIntoView({ block: 'nearest' }));
+    return () => cancelAnimationFrame(frame);
+  }, [open, text]);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyState('copied');
+    } catch {
+      const input = document.createElement('textarea');
+      input.value = text;
+      input.setAttribute('readonly', '');
+      input.style.position = 'fixed';
+      input.style.opacity = '0';
+      document.body.append(input);
+      input.select();
+      let copied = false;
+      try {
+        copied = document.execCommand('copy');
+      } catch {
+        copied = false;
+      } finally {
+        input.remove();
+      }
+      if (copied) {
+        setCopyState('copied');
+        return;
+      }
+      const selection = window.getSelection();
+      if (!selection || !commandBlock.current) {
+        setCopyState('failed');
+        return;
+      }
+      const range = document.createRange();
+      range.selectNodeContents(commandBlock.current);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      setCopyState('selected');
+    }
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="rounded-lg border border-fd-primary/30 bg-fd-primary/10 px-3 py-1.5 text-xs font-medium text-fd-primary transition-colors hover:bg-fd-primary/15"
+      >
+        {open ? 'Hide command' : 'Add data'}
+      </button>
+      {open && (
+        <div ref={panel} className="flex basis-full flex-col gap-2 rounded-lg border bg-fd-card p-3 text-xs">
+          <div className="flex min-w-0 items-start gap-2">
+            <div ref={commandBlock} className="min-w-0 flex-1">
+              {commands.map(({ kernel, command }) => (
+                <div key={kernel} className="min-w-0">
+                  {commands.length > 1 && <p className="mb-1 font-mono text-fd-muted-foreground">{kernel}</p>}
+                  <code className="block overflow-x-auto rounded-md bg-fd-muted/60 px-3 py-2 font-mono text-[11px] text-fd-foreground">
+                    {command}
+                  </code>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => void copy()}
+              className="shrink-0 rounded-md border px-2.5 py-1 font-medium transition-colors hover:bg-fd-accent"
+            >
+              {copyState === 'copied'
+                ? 'Copied'
+                : copyState === 'selected'
+                  ? 'Selected — copy'
+                  : copyState === 'failed'
+                    ? 'Copy failed'
+                    : 'Copy'}
+            </button>
+          </div>
+          <p className="text-fd-muted-foreground">
+            Fills missing production points for this exact slice; cached rows are skipped and{' '}
+            <code className="font-mono text-fd-foreground">--live</code> adds each result here.
+          </p>
+          <p aria-live="polite" className="sr-only">
+            {copyState === 'copied'
+              ? 'Command copied'
+              : copyState === 'selected'
+                ? 'Command selected; copy it manually'
+                : copyState === 'failed'
+                  ? 'Could not copy command'
+                  : ''}
+          </p>
+        </div>
+      )}
+    </>
   );
 }
 
