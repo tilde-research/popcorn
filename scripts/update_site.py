@@ -79,6 +79,12 @@ def _current(op: Any, records: Iterable[Record]) -> tuple[list[Record], int]:
     return _latest(current), len(records) - len(current)
 
 
+def benchmark_runs(op: Any, records: Iterable[Record]) -> int:
+    """Completed correctness trials represented by current, deduplicated rows."""
+    current, _ = _current(op, records)
+    return sum(record.result.reps for record in current)
+
+
 def _case(case_id: str, config: dict[str, Any]) -> dict[str, Any]:
     return {
         "case_id": case_id,
@@ -287,6 +293,7 @@ def payloads() -> dict[str, str]:
                 "tags": sorted(op.tags),
                 "impls": [b.name for b in op._impls],
                 "rows": data["evidence"]["coverage"]["results"],
+                "runs": benchmark_runs(op, records),
                 "cases": data["evidence"]["coverage"]["observed_cases"],
                 "curves": len(data["evidence"]["curves"]),
             }

@@ -1,6 +1,7 @@
 """GPU-free contract tests for the generated site evidence catalog."""
 
 import importlib.util
+import json
 from pathlib import Path
 
 import torch
@@ -57,7 +58,7 @@ def test_evidence_catalog_separates_curves_samples_and_frontiers(monkeypatch):
                 ref_hash,
                 implementation.fingerprint,
             ),
-            Result(status=status, grad=True, bench=bench, benchmarked=bool(bench)),
+            Result(status=status, grad=True, bench=bench, benchmarked=bool(bench), reps=10 if status == "pass" else 0),
         )
 
     first, second = curve.cases
@@ -65,10 +66,8 @@ def test_evidence_catalog_separates_curves_samples_and_frontiers(monkeypatch):
     stale_case = Case((("hidden", 4), ("seq", 9)), (), torch.float32, (("causal", False),), frozenset())
     stale = row(stale_case, "pass", ref_hash="old")
     newer_error = row(first, "error", ts="2026-08-04T00:00:00+00:00")
-    catalog = module.evidence(
-        op,
-        [row(first, "pass"), newer_error, row(second, "oom"), row(historical, "pass"), stale],
-    )
+    records = [row(first, "pass"), newer_error, row(second, "oom"), row(historical, "pass"), stale]
+    catalog = module.evidence(op, records)
 
     assert catalog["freshness"]["stale_results_omitted"] == 1
     assert historical.case_id in catalog["samples"]
@@ -86,3 +85,7 @@ def test_evidence_catalog_separates_curves_samples_and_frontiers(monkeypatch):
     assert frontier["pass_max"] == 8
     assert frontier["terminal"] == {"x": 16, "status": "oom"}
     assert catalog["coverage"]["statuses"] == {"oom": 1, "pass": 2}
+    monkeypatch.setattr(module, "KERNELS", {op.name: op})
+    monkeypatch.setattr(module, "read_file", lambda path: records)
+    index = json.loads(module.payloads()["index.json"])
+    assert index[0]["runs"] == 20

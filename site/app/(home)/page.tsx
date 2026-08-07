@@ -17,7 +17,7 @@ export default async function HomePage() {
       label: 'backends',
     },
     { value: implementations.length, label: 'implementations' },
-    { value: kernels.reduce((total, kernel) => total + kernel.rows, 0), label: 'benchmark rows' },
+    { value: kernels.reduce((total, kernel) => total + kernel.runs, 0), label: 'correctness trials' },
   ] as const;
 
   return (

@@ -4,6 +4,7 @@ export interface KernelIndexEntry {
   tags: string[];
   impls: string[];
   rows: number;
+  runs: number;
   cases: number;
   curves: number;
 }
