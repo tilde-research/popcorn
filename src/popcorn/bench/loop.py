@@ -4,7 +4,7 @@ The loop protocol (docs/loop.md): pick a target op, edit one candidate module un
 `popcorn/impls/`, run `try` after every change, and keep or revert on its verdict.
 Each case runs in its own subprocess so a crashing kernel cannot poison the parent's
 CUDA context. The log is an untracked scratchpad in the user cache; evidence enters
-the report database only through the normal grid (`python -m popcorn.bench run`).
+the report database only through the normal grid (`popcorn bench run`).
 """
 
 from __future__ import annotations
@@ -340,9 +340,9 @@ def cmd_status(args: argparse.Namespace) -> None:
         print("no experiment logs found")
 
 
-def main() -> None:
+def main(prog: str = "python -m popcorn.bench.loop") -> None:
     parser = argparse.ArgumentParser(
-        prog="python -m popcorn.bench.loop",
+        prog=prog,
         description="Optimization loop: rank targets, evaluate a candidate after each edit, track keep/revert history.",
     )
     sub = parser.add_subparsers(dest="command", required=True)

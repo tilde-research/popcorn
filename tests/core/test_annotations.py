@@ -5,7 +5,7 @@ import torch
 from jaxtyping import Float, Int
 from torch import Tensor
 
-from popcorn.core.annotations import dim_names, extract, plans
+from popcorn.core.annotations import dim_names, extract, plans, return_plans
 from popcorn.core.errors import DispatchError
 
 
@@ -28,6 +28,19 @@ def test_plans_and_dims():
     assert dim_names(specs) == {"D", "Dp", "N"}
     assert next(s for s in specs if s.param == "bias").optional
     assert "float32" in next(s for s in specs if s.param == "x").dtypes
+
+
+def test_return_plans_support_single_and_tuple_outputs():
+    def single(x: Float[Tensor, "... D"]) -> Float[Tensor, "... D"]:
+        return x
+
+    def pair(x: Float[Tensor, "batch D"]) -> tuple[Float[Tensor, "batch D"], Float[Tensor, "D"]]:
+        return x, x[0]
+
+    assert return_plans(inspect.signature(single))[0].tokens == (..., "D")
+    outputs = return_plans(inspect.signature(pair))
+    assert [spec.param for spec in outputs] == ["out0", "out1"]
+    assert [spec.tokens for spec in outputs] == [("batch", "D"), ("D",)]
 
 
 def test_extract_with_ellipsis_and_literals():

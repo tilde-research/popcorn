@@ -1,6 +1,6 @@
 """Nsight Compute harness for kernel work.
 
-`python -m popcorn.impls._profile <op> [name=value ...] [+name ...]` builds one
+`popcorn profile <op> [name=value ...] [+name ...]` builds one
 concrete case (dims default to the largest tested size), warms the op up so JIT
 builds and autotuning stay out of the capture, then re-runs itself under `ncu`
 with profiling scoped to the annotated call. `name=value` overrides a dim or a
@@ -95,10 +95,8 @@ def _batch(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in text.split(",") if part)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        prog="python -m popcorn.impls._profile", description="Profile one op case under Nsight Compute."
-    )
+def main(prog: str = "python -m popcorn.impls._profile") -> None:
+    parser = argparse.ArgumentParser(prog=prog, description="Profile one op case under Nsight Compute.")
     parser.add_argument("op", choices=sorted(KERNELS))
     parser.add_argument("case", nargs="*", metavar="name=value|+name", help="dim/arg overrides, +name for optional tensors")
     parser.add_argument("--backend", default="popcorn")

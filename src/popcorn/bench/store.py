@@ -434,7 +434,7 @@ class Store:
         _warned = True
         warnings.warn(
             f"no reports in {self.bundled}: every call will use the torch reference. "
-            "Fetch the published evidence with `python -m popcorn.bench pull`.",
+            "Fetch the published evidence with `popcorn bench pull`.",
             RuntimeWarning,
             stacklevel=3,
         )

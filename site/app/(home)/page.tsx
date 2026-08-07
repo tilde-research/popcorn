@@ -17,6 +17,7 @@ export default async function HomePage() {
       label: 'backends',
     },
     { value: implementations.length, label: 'implementations' },
+    { value: kernels.reduce((total, kernel) => total + kernel.rows, 0), label: 'benchmark rows' },
   ] as const;
 
   return (
@@ -55,7 +56,7 @@ export default async function HomePage() {
             {stats.map((s) => (
               <div key={s.label}>
                 <dt className="font-mono text-4xl text-fd-foreground tabular-nums sm:text-5xl">
-                  {s.value}
+                  {s.value.toLocaleString('en-US')}
                 </dt>
                 <dd className="mt-2 text-sm text-fd-muted-foreground">{s.label}</dd>
               </div>

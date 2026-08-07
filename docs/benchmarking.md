@@ -55,7 +55,7 @@ reports. Runtime benchmarking is synchronous and may compile every eligible impl
 Measure systematic coverage on the current device with:
 
 ```bash
-python -m popcorn.bench fill
+popcorn bench fill
 ```
 
 `fill` runs the shared case plan. Pairwise coverage exercises every value and two-axis
@@ -63,7 +63,8 @@ interaction without evaluating the full Cartesian product. Named production and 
 curves vary one axis at a time while their other dimensions stay fixed. Full-model temporal
 curves stop at 32K; reduced-shape frontier curves overlap from 8K and continue through 1M.
 
-Smaller shapes run first. Cases that cannot fit from their inputs alone are omitted. A reference,
+Smaller shapes run first. Cases that cannot fit the harness's native and fp64 correctness copies
+with workspace headroom are omitted. A reference,
 implementation OOM, or timeout skips only later cases that are at least as large in every
 dimension within the same gradient mode and case stratum. Skipped shapes are not stored as
 inferred results. Use `--limit N` for a deterministic random sample or `--force` to remeasure
@@ -74,7 +75,7 @@ cached cases.
 Project the rows from one `fill` process into the website while they are measured:
 
 ```bash
-python -m popcorn.bench fill rms_norm --live
+popcorn bench fill rms_norm --live
 ```
 
 Open `rms_norm` in the [kernel explorer](https://tilde-research.github.io/popcorn/kernels),
@@ -85,7 +86,7 @@ and recent results. It does not replace or modify the published plots.
 Use the same custom port on both sides when 8765 is unavailable:
 
 ```bash
-python -m popcorn.bench fill rms_norm --live 9000
+popcorn bench fill rms_norm --live 9000
 ```
 
 The website remembers the last port entered. The server binds only to `127.0.0.1`, accepts
@@ -98,10 +99,10 @@ not replayed. If every planned case is already cached, add `--force` to remeasur
 Maintainers can run the complete H100 sweep with:
 
 ```bash
-uv run python scripts/bench_sweep.py submit --nodes 6 --watch
+uv run popcorn sweep submit --nodes 6 --watch
 ```
 
-`--nodes` defaults to 6 and cannot exceed 6. `submit` queues one exclusive, singleton submitit
+`--nodes` defaults to 6 and cannot exceed 10. `submit` queues one exclusive, singleton submitit
 job named `popcorn-sweep`, with eight GPU workers per node, so sweeps cannot stack allocations.
 The coordinator measures the Torch references, then runs `popcorn`, `cudnn`, `fa3`, `fla`,
 `liger`, `quack`, `transformer_engine`, and `unsloth`, each in a freshly installed environment.
@@ -110,24 +111,38 @@ when `nvcc` cannot compile against torch's CUDA build.
 Use `--curves-only` for a release fill that skips sparse coverage samples already represented by
 the pinned database.
 
+On a cluster with Pyxis, a CUDA 13 development image with Git resolves both host problems:
+
+```bash
+uv run popcorn sweep resume logs/sweeps/<run> \
+  --container-image 'nvcr.io#nvidia/pytorch:25.09-py3' --watch
+```
+
+Every Slurm task runs in the image with the user's home mounted and the repository as its working
+directory. The configured image is inherited by later resumes and invalidates reusable phase
+environments when changed. Container execution is not supported with `--local`.
+The H100 sweep limits FA3's source build to the FP16/BF16 dense and varlen features its adapters
+expose, omitting SM80, FP8, paged/append-KV, local-window, softcap, and unequal-head-dimension variants.
+
 On one GPU without Slurm, the same orchestrator can collect the NVIDIA adapter curves in isolated
 environments:
 
 ```bash
-uv run python scripts/bench_sweep.py submit --local --phases reference cudnn transformer_engine \
+uv run popcorn sweep submit --local --phases reference cudnn transformer_engine \
   --ops attn softmax --curves-only --reps 3 --watch
 ```
 
 It does not publish. The resulting run and mergeable report cache stay under `logs/sweeps/`.
 
 The same explicit case plan drives the CLI, sweep, and site. Coverage samples remain sparse;
-production and long-context series provide plot-ready one-axis curves. Cases whose inputs alone
-exceed device memory are dropped at plan time, and each stratum runs cheapest first so budget
+production and long-context series provide plot-ready one-axis curves. Cases whose correctness
+copies cannot leave device workspace are dropped at plan time, and each stratum runs cheapest first so budget
 frontiers meet the OOM or timeout boundary before paying for anything beyond it.
 Static adapter gates also remove impossible dtype and scalar cases before either the backend or
 its reference work is scheduled.
-The sweep records fp16 frontier cases forward-only when backward would reduce more than 32K
-positions into a broadcast input, avoiding gradients that cannot be represented in fp16.
+The sweep records fp16 cases forward-only when backward would reduce 32K or more output
+positions into an input. This fanout comes from the input and output shape annotations, with
+the temporal-axis check retained when an output shape cannot be resolved.
 
 Workers run cases in process. A crash costs one case: a sentinel written before each case
 converts it to a `crash` row when the worker restarts. A hang costs one watchdog budget and
@@ -140,16 +155,16 @@ Torch version, fingerprint, case, and gradient-mode matches; correctness still e
 reference for every backend. Stopping the watcher does not cancel the job:
 
 ```bash
-uv run python scripts/bench_sweep.py watch
-uv run python scripts/bench_sweep.py resume [logs/sweeps/<run>] --watch
+uv run popcorn sweep watch
+uv run popcorn sweep resume [logs/sweeps/<run>] --watch
 ```
 
 The sweep does not publish results. Review the run cache, then merge its JSONL files into the
 Parquet store; `--scrub-incomplete` removes rows the harness scheduled but never measured:
 
 ```bash
-POPCORN_CACHE_DIR=logs/sweeps/<run>/cache uv run python -m popcorn.bench view --user
-uv run python -m popcorn.bench merge logs/sweeps/<run>/cache/v*/reports/*.jsonl
+POPCORN_CACHE_DIR=logs/sweeps/<run>/cache uv run popcorn bench view --user
+uv run popcorn bench merge logs/sweeps/<run>/cache/v*/reports/*.jsonl
 uv run python scripts/check_records.py --release \
   --include logs/sweeps/<run>/cache/v3/reports
 ```
@@ -165,7 +180,7 @@ logging.basicConfig()
 logging.getLogger("popcorn.bench").setLevel(logging.INFO)
 ```
 
-Render recorded data with `python -m popcorn.bench view --user`. This combines the local
+Render recorded data with `popcorn bench view --user`. This combines the local
 cache with bundled reports. The same data powers the
 [kernel explorer](https://tilde-research.github.io/popcorn/kernels), where named curves and
 sparse coverage samples are shown separately.

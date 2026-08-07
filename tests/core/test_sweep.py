@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,7 +13,7 @@ from torch import Tensor
 
 import popcorn.bench.sweep as planning
 from popcorn.bench.model import Case, Environment, Record, Result
-from popcorn.bench.sweep import MAX_NODES, PHASES, SweepConfig, phase_spec
+from popcorn.bench.sweep import DEFAULT_NODES, MAX_NODES, PHASES, SweepConfig, phase_spec
 from popcorn.core.dispatcher import Dispatcher
 
 
@@ -33,6 +34,18 @@ def _record(status="pass", case_id="case"):
     environment = Environment("cpu", torch.__version__, None, "2026-01-01T00:00:00+00:00")
     config = {"dims": {"D": 4}, "batch": [], "dtype": "float32", "args": {}, "present": []}
     return Record("op", "fast", "D=4", case_id, config, environment, result)
+
+
+def _scripted_popen(returncodes):
+    remaining = iter(returncodes)
+    started = []
+
+    def popen(*_args, **_kwargs):
+        returncode = next(remaining)
+        started.append(returncode)
+        return SimpleNamespace(returncode=returncode, poll=lambda: returncode)
+
+    return started, popen
 
 
 def test_sweep_phase_order_is_reference_then_isolated_backends():
@@ -71,14 +84,65 @@ def test_long_fp16_reductions_switch_to_forward_only():
         return x * weight
 
     op = Dispatcher(reference)
-    small = Case((("tokens", 32_768), ("channels", 8)), (), torch.float16, (), frozenset())
+    safe = Case((("tokens", 16_384), ("channels", 8)), (), torch.float16, (), frozenset())
+    boundary = Case((("tokens", 32_768), ("channels", 8)), (), torch.float16, (), frozenset())
     large = Case((("tokens", 65_536), ("channels", 8)), (), torch.float16, (), frozenset())
     wide_range = Case((("tokens", 65_536), ("channels", 8)), (), torch.bfloat16, (), frozenset())
 
-    assert planning.backward_safe(op, small)
+    assert planning.backward_safe(op, safe)
+    assert not planning.backward_safe(op, boundary)
     assert not planning.backward_safe(op, large)
     assert planning.backward_safe(op, wide_range)
-    assert planning.reference_modes(op, large) == (False,)
+    assert planning.reference_modes(op, boundary) == (False,)
+
+
+def test_fp16_output_fanout_switches_to_forward_only():
+    def fused(
+        x: Float[Tensor, "tokens channels"],
+        norm_weight: Float[Tensor, "channels"],
+        linear_weight: Float[Tensor, "out_features channels"],
+    ) -> Float[Tensor, "tokens out_features"]:
+        return (x * norm_weight) @ linear_weight.T
+
+    op = Dispatcher(fused)
+    failed = Case(
+        (("tokens", 8192), ("channels", 18_432), ("out_features", 28_672)),
+        (),
+        torch.float16,
+        (),
+        frozenset(),
+    )
+    small = Case(
+        (("tokens", 128), ("channels", 4096), ("out_features", 128)),
+        (),
+        torch.float16,
+        (),
+        frozenset(),
+    )
+    wide_range = Case(failed.dims, (), torch.bfloat16, (), frozenset())
+
+    assert planning.backward_safe(op, small)
+    assert not planning.backward_safe(op, failed)
+    assert planning.backward_safe(op, wide_range)
+    assert planning.reference_modes(op, failed) == (False,)
+
+
+def test_fp16_output_fanout_includes_named_batch_axes():
+    def gate(
+        x: Float[Tensor, "batch seq heads key_dim"],
+        weight: Float[Tensor, "heads"],
+    ) -> Float[Tensor, "batch seq heads key_dim"]:
+        return x * weight.view(1, 1, -1, 1)
+
+    case = Case(
+        (("batch", 8), ("seq", 8192), ("heads", 32), ("key_dim", 128)),
+        (),
+        torch.float16,
+        (),
+        frozenset(),
+    )
+
+    assert not planning.backward_safe(Dispatcher(gate), case)
 
 
 def test_static_adapter_gates_remove_impossible_reference_cases(monkeypatch):
@@ -133,15 +197,50 @@ def test_slurm_job_is_one_strict_node_capped_singleton():
     assert parameters["dependency"] == "singleton"
     assert parameters["job_name"] == "popcorn-sweep"
     assert parameters["time"] == 24 * 60
+    assert "srun_args" not in parameters
 
 
-def test_sweep_config_defaults_to_six_nodes_and_rejects_more():
-    assert SweepConfig().nodes == MAX_NODES == 6
+def test_queued_sweeps_ignores_jobs_finishing_dynamic_node_cleanup(monkeypatch):
+    calls = []
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        return SimpleNamespace(stdout="132619 CG\n132645 PD\n132646 R\n")
+
+    monkeypatch.setattr(sweep.subprocess, "run", run)
+
+    assert sweep._queued_sweeps() == ["132645", "132646"]
+    assert calls[0][-2:] == ["popcorn-sweep", "--format=%i %t"]
+
+
+def test_slurm_container_mounts_home_and_uses_the_repository_workdir():
+    image = "nvcr.io#nvidia/pytorch:25.09-py3"
+    parameters = sweep._slurm_parameters(SweepConfig(container_image=image))
+
+    assert parameters["srun_args"] == (
+        f"--container-image={image}",
+        "--container-mount-home",
+        f"--container-workdir={sweep.ROOT}",
+    )
+
+
+def test_sweep_config_round_trips_container_and_rejects_invalid_execution_modes():
+    assert SweepConfig().nodes == DEFAULT_NODES == 6
+    assert MAX_NODES == 10
     assert SweepConfig().workers == 48
-    targeted = SweepConfig(nodes=2, curves_only=True)
+    targeted = SweepConfig(
+        nodes=2,
+        curves_only=True,
+        container_image="nvcr.io#nvidia/pytorch:25.09-py3",
+    )
     assert SweepConfig.from_mapping(targeted.to_dict()) == targeted
-    with pytest.raises(ValueError, match="between 1 and 6"):
-        SweepConfig(nodes=7)
+    assert sweep._nodes("10") == 10
+    with pytest.raises(sweep.argparse.ArgumentTypeError, match="must not exceed 10"):
+        sweep._nodes("11")
+    with pytest.raises(ValueError, match="between 1 and 10"):
+        SweepConfig(nodes=11)
+    with pytest.raises(ValueError, match="requires a Slurm sweep"):
+        SweepConfig(local=True, container_image="cuda:13")
 
 
 def test_walltime_parses_slurm_and_minute_forms():
@@ -164,6 +263,7 @@ def test_each_backend_phase_wipes_and_reinstalls_one_extra(monkeypatch, tmp_path
     assert commands[0][0] == ["/usr/bin/uv", "venv", "--clear", "--python", version, str(environment)]
     assert commands[1][0][-2:] == ["-e", ".[fla]"]
     assert all(command[1]["POPCORN_SKIP_REPORTS"] == "1" for command in commands)
+    assert all("FLASH_ATTENTION_DISABLE_SM80" not in command[1] for command in commands)
 
 
 def test_popcorn_phase_allows_its_fla_support_dependency_without_measuring_it(monkeypatch):
@@ -186,15 +286,40 @@ def test_popcorn_phase_allows_its_fla_support_dependency_without_measuring_it(mo
 
 
 def test_fa3_phase_installs_build_requirements_before_the_extra(monkeypatch, tmp_path):
-    commands = []
+    calls = []
     monkeypatch.setattr(sweep.shutil, "which", lambda name: "/usr/bin/uv")
     monkeypatch.setattr(sweep.shutil, "rmtree", lambda *args, **kwargs: None)
-    monkeypatch.setattr(sweep, "_run_logged", lambda command, log, env: commands.append(command))
+    monkeypatch.setattr(sweep, "_run_logged", lambda command, log, env: calls.append((command, env)))
 
     sweep.install_environment("fa3", tmp_path / "environment", tmp_path / "install.log")
+    commands = [command for command, _ in calls]
     assert len(commands) == 3
     assert commands[1][-4:] == ["torch", "setuptools", "wheel", "packaging"]
     assert commands[2][-2:] == ["-e", ".[fa3]"]
+    assert {
+        name for name, value in calls[2][1].items() if name.startswith("FLASH_ATTENTION_DISABLE_") and value == "TRUE"
+    } >= {
+        "FLASH_ATTENTION_DISABLE_SM80",
+        "FLASH_ATTENTION_DISABLE_FP8",
+        "FLASH_ATTENTION_DISABLE_PAGEDKV",
+        "FLASH_ATTENTION_DISABLE_APPENDKV",
+        "FLASH_ATTENTION_DISABLE_LOCAL",
+        "FLASH_ATTENTION_DISABLE_SOFTCAP",
+        "FLASH_ATTENTION_DISABLE_HDIMDIFF64",
+        "FLASH_ATTENTION_DISABLE_HDIMDIFF192",
+    }
+
+
+def test_environment_fingerprint_includes_phase_build_environment(monkeypatch):
+    spec = phase_spec("fa3")
+    original = sweep._lock_fingerprint("fa3", "cuda13")
+    monkeypatch.setattr(
+        sweep,
+        "phase_spec",
+        lambda _name: replace(spec, build_env=(*spec.build_env, ("FLASH_ATTENTION_DISABLE_SPLIT", "TRUE"))),
+    )
+
+    assert sweep._lock_fingerprint("fa3", "cuda13") != original
 
 
 def test_cudnn_preflight_executes_the_direct_adapter(monkeypatch, tmp_path):
@@ -225,7 +350,7 @@ def test_cudnn_preflight_reports_the_last_error_line(monkeypatch, tmp_path):
     )
 
 
-def test_environment_reuse_skips_the_rebuild_until_the_lock_changes(monkeypatch, tmp_path):
+def test_environment_reuse_skips_rebuild_until_the_lock_or_container_changes(monkeypatch, tmp_path):
     built = []
 
     def fake_install(phase_name, destination, log):
@@ -235,16 +360,19 @@ def test_environment_reuse_skips_the_rebuild_until_the_lock_changes(monkeypatch,
         return destination / "bin" / "python"
 
     monkeypatch.setattr(sweep, "install_environment", fake_install)
-    monkeypatch.setattr(sweep, "_lock_fingerprint", lambda phase: f"{phase}-v1")
+    monkeypatch.setattr(sweep, "_lock_fingerprint", lambda phase, image=None: f"{phase}-{image}-v1")
     environment = tmp_path / "environment"
 
-    sweep._ensure_environment("fla", environment, tmp_path / "install.log")
-    sweep._ensure_environment("fla", environment, tmp_path / "install.log")
+    sweep._ensure_environment("fla", environment, tmp_path / "install.log", "cuda13")
+    sweep._ensure_environment("fla", environment, tmp_path / "install.log", "cuda13")
     assert built == ["fla"]
 
-    monkeypatch.setattr(sweep, "_lock_fingerprint", lambda phase: f"{phase}-v2")
-    sweep._ensure_environment("fla", environment, tmp_path / "install.log")
+    sweep._ensure_environment("fla", environment, tmp_path / "install.log", "cuda13-new")
     assert built == ["fla", "fla"]
+
+    monkeypatch.setattr(sweep, "_lock_fingerprint", lambda phase, image=None: f"{phase}-{image}-v2")
+    sweep._ensure_environment("fla", environment, tmp_path / "install.log", "cuda13-new")
+    assert built == ["fla", "fla", "fla"]
 
 
 def test_case_budget_floors_at_timeout_and_scales_with_bytes():
@@ -261,18 +389,40 @@ def test_case_budget_floors_at_timeout_and_scales_with_bytes():
     assert 300 < sweep._budget(op, Case((("hidden", 16384), ("seq", 16384)), (), torch.float32, (), frozenset()), 300) < 900
 
 
-def test_infeasibility_prices_gradients_and_never_prunes_unpriceable_cases():
+def test_infeasibility_prices_correctness_copies_and_never_prunes_unpriceable_cases():
     def reference(x: Float[Tensor, "seq hidden"]):
         return x
 
     op = Dispatcher(reference)
     case = Case((("hidden", 1024), ("seq", 1024)), (), torch.float32, (), frozenset())
     bytes_in = 1024 * 1024 * 4
-    assert sweep._infeasible(op, case, grad=True, capacity=bytes_in * 2)
-    assert not sweep._infeasible(op, case, grad=False, capacity=bytes_in * 2)
-    assert not sweep._infeasible(op, case, grad=True, capacity=bytes_in * 8)
+    assert sweep._infeasible(op, case, grad=True, capacity=bytes_in * 10)
+    assert not sweep._infeasible(op, case, grad=True, capacity=bytes_in * 11)
+    assert sweep._infeasible(op, case, grad=False, capacity=bytes_in * 6)
+    assert not sweep._infeasible(op, case, grad=False, capacity=bytes_in * 7)
     unpriceable = Case((("mystery", 4),), (), torch.float32, (), frozenset())
     assert not sweep._infeasible(op, unpriceable, grad=True, capacity=1)
+
+
+def test_infeasibility_rejects_reference_case_without_cudnn_workspace():
+    def convolution(
+        scores: Float[Tensor, "batch channels seq seq"],
+        weight: Float[Tensor, "out_channels channels kernel_size kernel_size"],
+        bias: Float[Tensor, "out_channels"] | None = None,
+    ):
+        del weight, bias
+        return scores
+
+    op = Dispatcher(convolution)
+    case = Case(
+        (("batch", 1), ("channels", 12_288), ("kernel_size", 11), ("out_channels", 2048), ("seq", 37)),
+        (),
+        torch.bfloat16,
+        (),
+        frozenset({"bias"}),
+    )
+
+    assert sweep._infeasible(op, case, grad=True, capacity=80 * 2**30)
 
 
 def test_shard_reader_tolerates_the_torn_line_a_killed_worker_leaves(tmp_path):
@@ -322,9 +472,64 @@ def test_poison_marks_match_the_async_cuda_failures_and_nothing_routine():
         assert not any(mark in reason for mark in sweep.POISON_MARKS), reason
 
 
+@pytest.mark.parametrize("returncode", [sweep.WATCHDOG_EXIT, sweep.POISON_EXIT])
+def test_supervise_does_not_count_controlled_recycles(monkeypatch, tmp_path, returncode):
+    started, popen = _scripted_popen([returncode, returncode, returncode, 0])
+    monkeypatch.setattr(sweep, "MAX_RESTARTS", 2)
+    monkeypatch.setattr(sweep.subprocess, "Popen", popen)
+    monkeypatch.setattr(sweep.time, "sleep", lambda _seconds: None)
+
+    sweep._supervise(
+        tmp_path,
+        "reference",
+        3,
+        tmp_path / "python",
+        reps=10,
+        timeout=300,
+        hardware=None,
+        drain=tmp_path / "drain",
+    )
+
+    assert started == [returncode, returncode, returncode, 0]
+    assert not (tmp_path / "reference" / "progress" / "3.json").exists()
+
+
+def test_supervise_still_caps_unexpected_worker_deaths(monkeypatch, tmp_path):
+    started, popen = _scripted_popen([137, 137])
+    monkeypatch.setattr(sweep, "MAX_RESTARTS", 2)
+    monkeypatch.setattr(sweep.subprocess, "Popen", popen)
+    monkeypatch.setattr(sweep.time, "sleep", lambda _seconds: None)
+
+    sweep._supervise(
+        tmp_path,
+        "reference",
+        3,
+        tmp_path / "python",
+        reps=10,
+        timeout=300,
+        hardware=None,
+        drain=tmp_path / "drain",
+    )
+
+    progress = sweep._read_json(tmp_path / "reference" / "progress" / "3.json")
+    assert started == [137, 137]
+    assert progress == {"error": "worker kept dying (exit 137 after 2 restarts)", "status": "failed"}
+
+
 def test_reference_quality_gate_rejects_bad_statuses_and_timing_errors():
     assert sweep._quality_error({"pass": 8, "oom": 2, "timeout": 1}) == ""
     assert sweep._quality_error({"pass": 8, "fail": 2}, bench_errors=3) == "fail=2, bench_error=3"
+
+
+def test_cached_quality_gate_rejects_only_bad_reference_evidence():
+    passing = _record()
+    failed = _record("fail")
+    untimed = _record()
+    untimed.result.bench_error = "timing failed"
+
+    assert sweep._cached_quality_error("reference", [passing]) == ""
+    assert sweep._cached_quality_error("reference", [passing, failed, untimed]) == "fail=1, bench_error=1"
+    assert sweep._cached_quality_error("popcorn", [passing, failed, untimed]) == ""
 
 
 def test_followers_start_each_announced_phase_exactly_once():
@@ -416,15 +621,17 @@ def test_watch_tolerates_transient_missing_state(monkeypatch, tmp_path):
 
 
 def test_manual_resume_revalidates_settled_phases(monkeypatch, tmp_path):
-    state = sweep._new_state(tmp_path, ["reference", "popcorn"])
+    state = sweep._new_state(tmp_path, ["reference", "popcorn", "fa3"])
     state["phases"][0]["status"] = "completed"
     state["phases"][1]["status"] = "skipped"
+    state["phases"][2].update(status="installing", message="building isolated environment")
     sweep._write_json(tmp_path / sweep.STATE, state)
-    monkeypatch.setattr(sweep, "expected_totals", lambda *args: {"reference": 3, "popcorn": 5})
+    monkeypatch.setattr(sweep, "expected_totals", lambda *args: {"reference": 3, "popcorn": 5, "fa3": 7})
 
-    config = SweepConfig(phases=("reference", "popcorn"), local=True)
+    config = SweepConfig(phases=("reference", "popcorn", "fa3"), local=True)
     sweep._submit(tmp_path, config, dry_run=True, revalidate=True)
 
     resumed = sweep._read_json(tmp_path / sweep.STATE)
-    assert [phase["status"] for phase in resumed["phases"]] == ["pending", "pending"]
-    assert [phase["total"] for phase in resumed["phases"]] == [3, 5]
+    assert [phase["status"] for phase in resumed["phases"]] == ["pending", "pending", "pending"]
+    assert [phase["total"] for phase in resumed["phases"]] == [3, 5, 7]
+    assert resumed["phases"][2]["message"] == "resuming unfinished phase"

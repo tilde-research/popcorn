@@ -7,9 +7,9 @@
   <a href="https://pypi.org/project/popcorn/"><img src="https://img.shields.io/pypi/v/popcorn" alt="PyPI"/></a>
   <a href="https://github.com/tilde-research/popcorn/releases/latest"><img src="https://img.shields.io/github/v/release/tilde-research/popcorn" alt="release"/></a>
   <img src="https://img.shields.io/badge/kernels-96-blue" alt="kernels"/>
-  <img src="https://img.shields.io/badge/backends-6-blue" alt="backends"/>
-  <img src="https://img.shields.io/badge/implementations-223-blue" alt="implementations"/>
-  <img src="https://img.shields.io/badge/grid%20rows-222%2C281-blue" alt="grid rows"/>
+  <img src="https://img.shields.io/badge/backends-8-blue" alt="backends"/>
+  <img src="https://img.shields.io/badge/implementations-222-blue" alt="implementations"/>
+  <img src="https://img.shields.io/badge/grid%20rows-152%2C116-blue" alt="grid rows"/>
 </p>
 <!-- /popcorn:badges -->
 
@@ -54,7 +54,7 @@ Add one extra per backend you want. There is no "everything" extra: the backends
 
 Installing also fetches the benchmark cache that dispatch selects implementations with, from the [popcorn-reports](https://huggingface.co/datasets/tilde-research/popcorn-reports) dataset at the revision this version pins. Set `POPCORN_SKIP_REPORTS=1` to install without it; popcorn then falls back to the reference for every call and says so. Refresh it at any time with:
 ```bash
-uv run python -m popcorn.bench pull
+popcorn bench pull
 ```
 
 A backend is eligible only when its package is installed at a declared supported version: auto-dispatch skips unavailable ones, and forcing one raises with the install hint or version error. First-party kernels (the `popcorn` backend) are always included.
@@ -95,7 +95,7 @@ Popcorn stands on the shoulders of the open-source kernel ecosystem. The optimiz
 - [NVIDIA Transformer Engine](https://github.com/NVIDIA/TransformerEngine)
 - [Unsloth](https://github.com/unslothai/unsloth)
 
-The agent optimization loop (`python -m popcorn.bench.loop`) is inspired by [AutoKernel](https://github.com/RightNow-AI/autokernel)'s edit–evaluate–keep/revert cycle for autonomous kernel search.
+The agent optimization loop (`popcorn loop`) is inspired by [AutoKernel](https://github.com/RightNow-AI/autokernel)'s edit–evaluate–keep/revert cycle for autonomous kernel search.
 
 ## Citation
 

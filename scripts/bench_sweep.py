@@ -2,10 +2,10 @@
 """Popcorn benchmark sweep: one submitit job, one isolated backend at a time, resumable.
 
 Usage:
-    uv run python scripts/bench_sweep.py submit [--nodes N] [--curves-only] [--watch]
-    uv run python scripts/bench_sweep.py resume [RUN] [--watch]
-    uv run python scripts/bench_sweep.py watch [RUN]
-    uv run python scripts/bench_sweep.py status [RUN]
+    uv run popcorn sweep submit [--nodes N] [--curves-only] [--watch]
+    uv run popcorn sweep resume [RUN] [--watch]
+    uv run popcorn sweep watch [RUN]
+    uv run popcorn sweep status [RUN]
 
 A single Slurm job (`--nodes`, capped at 6, with 8 GPUs each) walks
 the phases in order: torch references first, then each backend family in a freshly
@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from popcorn.bench.sweep import (
+    DEFAULT_NODES,
     GPUS_PER_NODE,
     MAX_NODES,
     PHASES,
@@ -69,11 +70,18 @@ TERMINAL = {"completed", "failed", "paused"}
 SETTLED = {"completed", "skipped"}
 WATCHDOG_EXIT = 90
 POISON_EXIT = 91
+CONTROLLED_EXITS = frozenset({WATCHDOG_EXIT, POISON_EXIT})
 BAD_OUTCOMES = ("fail", "crash", "error")
 REFERENCE_TIMEOUT = 60
 # CUDA reports these asynchronously and never recovers the context: every later kernel in the
 # process fails too, so the worker must recycle after recording the case that surfaced one.
-POISON_MARKS = ("illegal memory access", "device-side assert", "unspecified launch failure", "misaligned address")
+POISON_MARKS = (
+    "illegal memory access",
+    "device-side assert",
+    "unspecified launch failure",
+    "misaligned address",
+    "unable to find an engine",
+)
 MAX_ATTEMPTS = 40
 MAX_RESTARTS = 60
 MERGE_EVERY = 600.0
@@ -200,6 +208,8 @@ def plan_phase(
     capacity = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory
     store = Store()
     current = _usable_records(store, triples, device)
+    if quality_error := _cached_quality_error(phase_name, current):
+        raise RuntimeError(f"invalid cached {phase_name} evidence: {quality_error}")
     cached = _record_index(current)
     frontiers: dict[tuple[str, str, bool], BudgetFrontier] = {}
     for record in current:
@@ -287,17 +297,21 @@ def install_environment(phase_name: str, destination: Path, log: Path) -> Path:
     if uv is None:
         raise RuntimeError("uv is not installed")
     shutil.rmtree(destination, ignore_errors=True)
-    env = os.environ | {
-        "POPCORN_SKIP_REPORTS": "1",
-        "MAX_JOBS": os.getenv("MAX_JOBS", "8"),
-        "CMAKE_BUILD_PARALLEL_LEVEL": os.getenv("CMAKE_BUILD_PARALLEL_LEVEL", "8"),
-    }
+    spec = phase_spec(phase_name)
+    env = (
+        os.environ
+        | {
+            "POPCORN_SKIP_REPORTS": "1",
+            "MAX_JOBS": os.getenv("MAX_JOBS", "8"),
+            "CMAKE_BUILD_PARALLEL_LEVEL": os.getenv("CMAKE_BUILD_PARALLEL_LEVEL", "8"),
+        }
+        | dict(spec.build_env)
+    )
     # Pin the interpreter to the driver's: fingerprints and torch wheels must not drift
     # with whatever default python uv happens to prefer on the node.
     version = f"{sys.version_info.major}.{sys.version_info.minor}"
     _run_logged([uv, "venv", "--clear", "--python", version, str(destination)], log, env)
     python = destination / "bin" / "python"
-    spec = phase_spec(phase_name)
     if spec.build_requirements:
         _run_logged(
             [
@@ -323,11 +337,14 @@ def install_environment(phase_name: str, destination: Path, log: Path) -> Path:
     return python
 
 
-def _lock_fingerprint(phase_name: str) -> str:
+def _lock_fingerprint(phase_name: str, container_image: str | None = None) -> str:
     spec = phase_spec(phase_name)
     digest = hashlib.sha256(phase_name.encode())
     digest.update((spec.extra or "").encode())
+    digest.update(f"container={container_image or ''}".encode())
     digest.update(f"py{sys.version_info.major}.{sys.version_info.minor}".encode())
+    for name, value in sorted(spec.build_env):
+        digest.update(f"{name}={value}".encode())
     for package in spec.packages:
         digest.update(package.encode())
     for name in ("uv.lock", "pyproject.toml"):
@@ -337,7 +354,12 @@ def _lock_fingerprint(phase_name: str) -> str:
     return digest.hexdigest()
 
 
-def _ensure_environment(phase_name: str, destination: Path, log: Path) -> Path:
+def _ensure_environment(
+    phase_name: str,
+    destination: Path,
+    log: Path,
+    container_image: str | None = None,
+) -> Path:
     """Build the phase environment, or reuse it when the same attempt was already built.
 
     A drained job resubmits itself mid-phase; rebuilding an identical environment on the
@@ -345,7 +367,7 @@ def _ensure_environment(phase_name: str, destination: Path, log: Path) -> Path:
     environment contains and a matching marker short-circuits the build.
     """
     marker = destination.with_name(destination.name + ".json")
-    fingerprint = _lock_fingerprint(phase_name)
+    fingerprint = _lock_fingerprint(phase_name, container_image)
     python = destination / "bin" / "python"
     if python.exists() and _read_json(marker) == fingerprint:
         return python
@@ -657,6 +679,14 @@ def _quality_error(statuses: dict[str, int], bench_errors: int = 0) -> str:
     return ", ".join(problems)
 
 
+def _cached_quality_error(phase_name: str, records: list[Any]) -> str:
+    if phase_name != "reference":
+        return ""
+    statuses = Counter(record.result.status for record in records)
+    bench_errors = sum(bool(record.result.bench_error) for record in records)
+    return _quality_error(statuses, bench_errors)
+
+
 def _aggregate_progress(phase_dir: Path) -> dict[str, Any]:
     measured = 0
     pruned = 0
@@ -730,7 +760,7 @@ def _supervise(
     drain: Path,
     tick: Any = None,
 ) -> None:
-    """Keep one worker subprocess alive until it finishes cleanly or wears out its restarts."""
+    """Keep one worker alive until it finishes or exhausts its unexpected-death restarts."""
     phase_dir = run / phase_name
     log = phase_dir / "logs" / f"{rank}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -767,6 +797,8 @@ def _supervise(
             return
         if drain.exists():
             return  # the job is ending; whatever was lost replans on the next attempt
+        if process.returncode in CONTROLLED_EXITS:
+            continue
         restarts += 1
         if restarts >= MAX_RESTARTS:
             progress = phase_dir / "progress" / f"{rank}.json"
@@ -885,7 +917,7 @@ def _coordinate(run: Path, config: SweepConfig, world: int, job: str, drain: Pat
                 continue
             phase.update(status="installing", message="building isolated environment")
             _save_state(run, state)
-            python = _ensure_environment(phase_name, environment, phase_dir / "install.log")
+            python = _ensure_environment(phase_name, environment, phase_dir / "install.log", config.container_image)
             if phase_name == "cudnn" and (reason := preflight_cudnn(python)):
                 phase.update(status="skipped", message=reason)
                 continue
@@ -993,7 +1025,7 @@ def _follow(run: Path, rank: int, job: str, drain: Path) -> None:
 
 def _slurm_parameters(config: SweepConfig | dict[str, Any]) -> dict[str, Any]:
     config = config if isinstance(config, SweepConfig) else SweepConfig.from_mapping(config)
-    return {
+    parameters: dict[str, Any] = {
         "job_name": "popcorn-sweep",
         "nodes": config.nodes,
         "ntasks_per_node": GPUS_PER_NODE,
@@ -1009,6 +1041,13 @@ def _slurm_parameters(config: SweepConfig | dict[str, Any]) -> dict[str, Any]:
         "signal_delay_s": 900,
         "stderr_to_stdout": True,
     }
+    if config.container_image:
+        parameters["srun_args"] = (
+            f"--container-image={config.container_image}",
+            "--container-mount-home",
+            f"--container-workdir={ROOT}",
+        )
+    return parameters
 
 
 def _launch(run: Path, config: SweepConfig) -> str:
@@ -1027,12 +1066,15 @@ def _launch(run: Path, config: SweepConfig) -> str:
 
 
 def _queued_sweeps() -> list[str]:
-    return subprocess.run(
-        ["squeue", "--noheader", "--user", os.getenv("USER", ""), "--name", "popcorn-sweep", "--format=%i"],
+    output = subprocess.run(
+        ["squeue", "--noheader", "--user", os.getenv("USER", ""), "--name", "popcorn-sweep", "--format=%i %t"],
         capture_output=True,
         text=True,
         check=True,
-    ).stdout.split()
+    ).stdout
+    # A canceled job can remain CG while dynamic nodes tear down. It cannot do
+    # more work, and Slurm's singleton dependency still holds its successor.
+    return [fields[0] for line in output.splitlines() if len(fields := line.split()) == 2 and fields[1] != "CG"]
 
 
 def _submit(run: Path, config: SweepConfig, dry_run: bool, revalidate: bool = False) -> None:
@@ -1041,8 +1083,12 @@ def _submit(run: Path, config: SweepConfig, dry_run: bool, revalidate: bool = Fa
     state = _read_json(run / STATE) or _new_state(run, list(config.phases))
     if revalidate:
         for phase in state["phases"]:
-            if phase["status"] in SETTLED:
-                phase.update(status="pending", message="revalidating current source, environment, and case plan")
+            message = (
+                "revalidating current source, environment, and case plan"
+                if phase["status"] in SETTLED
+                else "resuming unfinished phase"
+            )
+            phase.update(status="pending", message=message)
     state["workers"] = config.workers
     state.pop("slurm_state", None)
     only = set(config.ops) if config.ops else None
@@ -1125,7 +1171,7 @@ def watch(run: Path) -> None:
                 return
             time.sleep(2)
     except KeyboardInterrupt:
-        print(f"\nwatch stopped; the job continues. Resume with:\n  uv run python scripts/bench_sweep.py watch {run}")
+        print(f"\nwatch stopped; the job continues. Resume with:\n  uv run popcorn sweep watch {run}")
 
 
 def _fresh_run() -> Path:
@@ -1149,10 +1195,18 @@ def main() -> None:
         command.add_argument("--time", help="walltime per attempt (default 24:00:00); drained work resubmits itself")
         command.add_argument("--reps", type=_positive)
         command.add_argument("--timeout", type=_positive, help="per-case watchdog floor in seconds (default 300)")
-        command.add_argument("--nodes", type=_nodes, help=f"Slurm nodes (default and maximum: {MAX_NODES})")
+        command.add_argument(
+            "--nodes",
+            type=_nodes,
+            help=f"Slurm nodes (default: {DEFAULT_NODES}, maximum: {MAX_NODES})",
+        )
         command.add_argument("--curves-only", action="store_true", help="run named curve cases without coverage samples")
         command.add_argument("--phases", nargs="*", choices=PHASES, help="run only these phases (default: all)")
         command.add_argument("--ops", nargs="*", help="run only these ops (default: all registered)")
+        command.add_argument(
+            "--container-image",
+            help="run Slurm tasks in this Pyxis image (for example, a CUDA 13 devel image)",
+        )
         command.add_argument("--local", action="store_true", help="run in-process via submitit's LocalExecutor (1 worker)")
         command.add_argument("--watch", action="store_true")
         command.add_argument("--dry-run", action="store_true")
@@ -1200,8 +1254,9 @@ def main() -> None:
             qos=args.qos or previous.get("qos") or "staff-prod",
             walltime=args.time or previous.get("walltime") or "24:00:00",
             hardware=None if local else previous.get("hardware") or "H100",
+            container_image=args.container_image or previous.get("container_image"),
             local=local,
-            nodes=args.nodes or previous.get("nodes") or MAX_NODES,
+            nodes=args.nodes or previous.get("nodes") or DEFAULT_NODES,
             curves_only=bool(args.curves_only or previous.get("curves_only")),
         )
         _submit(run, config, args.dry_run, revalidate=args.command == "resume")

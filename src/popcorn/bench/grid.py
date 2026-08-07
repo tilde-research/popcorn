@@ -483,14 +483,22 @@ def grid_cases(op: Any) -> list[Case]:
     return case_plan(op).flatten()
 
 
+def _omitted_extent(tokens: Sequence[Any], represented: set[Any], case: Case) -> int:
+    dims, args = dict(case.dims), dict(case.args)
+    extent = 1
+    for token in tokens:
+        if getattr(token, "base", token) in represented:
+            continue
+        extent *= math.prod(case.batch) if token is ... else token_size(token, dims, args, "return")
+    return extent
+
+
 def backward_safe(op: Any, case: Case) -> bool:
-    """Whether fp16 gradients avoid an oversized reduction into a broadcast input."""
+    """Whether fp16 gradients avoid an oversized reduction into any input."""
     if str(case.dtype) != "torch.float16":
         return True
     dims = dict(case.dims)
     temporal = _TEMPORAL_DIMS & dims.keys()
-    if not temporal:
-        return True
     for spec in op.specs:
         if spec.optional and spec.param not in case.present:
             continue
@@ -500,8 +508,15 @@ def backward_safe(op: Any, case: Case) -> bool:
         extent = math.prod(dims[name] for name in temporal if name not in represented)
         if ... not in spec.tokens:
             extent *= math.prod(case.batch)
-        if extent > _FP16_BACKWARD_ACCUMULATION_LIMIT:
+        if extent >= _FP16_BACKWARD_ACCUMULATION_LIMIT:
             return False
+        for output in op.output_specs:
+            try:
+                extent = _omitted_extent(output.tokens, represented, case)
+            except KeyError:
+                continue
+            if extent >= _FP16_BACKWARD_ACCUMULATION_LIMIT:
+                return False
     return True
 
 

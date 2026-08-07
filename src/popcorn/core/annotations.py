@@ -33,7 +33,7 @@ _EXPRESSION = re.compile(r"^(?P<base>[^\W\d]\w*)(?P<op>[+\-*/])(?P<operand>\w+)$
 
 @dataclass(frozen=True, slots=True)
 class TensorSpec:
-    """One tensor parameter's parsed shape tokens, accepted dtypes, and optionality."""
+    """One tensor annotation's parsed shape tokens, accepted dtypes, and optionality."""
 
     param: str
     tokens: tuple[DimToken, ...]
@@ -66,24 +66,47 @@ def _token(text: str, param: str) -> DimToken:
     )
 
 
-def plans(signature: inspect.Signature) -> tuple[TensorSpec, ...]:
-    specs = []
-    for name, param in signature.parameters.items():
-        annotation, optional = _unwrap_optional(param.annotation)
-        dim_str = getattr(annotation, "dim_str", None)
-        if dim_str is None:
-            continue
-        tokens = tuple(_token(t, name) for t in dim_str.split())
-        if tokens.count(...) > 1:
-            raise TypeError(f"{name}: at most one '...' per annotation")
-        specs.append(TensorSpec(name, tokens, getattr(annotation, "dtypes", ()), optional))
-    tensors = {spec.param for spec in specs}
+def _spec(name: str, annotation: Any) -> TensorSpec | None:
+    annotation, optional = _unwrap_optional(annotation)
+    dim_str = getattr(annotation, "dim_str", None)
+    if dim_str is None:
+        return None
+    tokens = tuple(_token(token, name) for token in dim_str.split())
+    if tokens.count(...) > 1:
+        raise TypeError(f"{name}: at most one '...' per annotation")
+    return TensorSpec(name, tokens, getattr(annotation, "dtypes", ()), optional)
+
+
+def _validate(signature: inspect.Signature, specs: Iterable[TensorSpec], tensors: set[str]) -> None:
     for spec in specs:
         for token in spec.tokens:
             if isinstance(token, Derived) and isinstance(token.operand, str) and token.operand not in signature.parameters:
                 raise TypeError(f"{spec.param}: dim {token}: operand {token.operand!r} is not a parameter")
             if isinstance(token, Derived) and token.operand in tensors:
                 raise TypeError(f"{spec.param}: dim {token}: operand {token.operand!r} must be a scalar parameter")
+
+
+def plans(signature: inspect.Signature) -> tuple[TensorSpec, ...]:
+    specs = tuple(spec for name, param in signature.parameters.items() if (spec := _spec(name, param.annotation)) is not None)
+    tensors = {spec.param for spec in specs}
+    _validate(signature, specs, tensors)
+    return specs
+
+
+def return_plans(signature: inspect.Signature) -> tuple[TensorSpec, ...]:
+    """Parsed tensor shapes in a reference's return annotation."""
+    specs = []
+
+    def visit(annotation: Any) -> None:
+        if spec := _spec(f"out{len(specs)}", annotation):
+            specs.append(spec)
+        elif typing.get_origin(annotation) is tuple:
+            for member in typing.get_args(annotation):
+                if member is not ...:
+                    visit(member)
+
+    visit(signature.return_annotation)
+    _validate(signature, specs, {spec.param for spec in plans(signature)})
     return tuple(specs)
 
 

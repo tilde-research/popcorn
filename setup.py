@@ -43,7 +43,7 @@ def _fetch() -> None:
             f"popcorn: could not fetch the report cache from {repo} at {revision or 'the default branch'}:\n"
             f"  {type(error).__name__}: {error}\n"
             "Reports are what dispatch selects implementations with. Retry with network access, or set\n"
-            "POPCORN_SKIP_REPORTS=1 to install without them and fetch later with `python -m popcorn.bench pull`."
+            "POPCORN_SKIP_REPORTS=1 to install without them and fetch later with `popcorn bench pull`."
         ) from error
     REPORTS.mkdir(parents=True, exist_ok=True)
     sources = sorted(snapshot.glob("*.parquet"))

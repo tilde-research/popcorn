@@ -118,9 +118,9 @@ def main() -> None:
         report.append(f"  allowed: {pair} ({QUALITY_EXCEPTIONS[pair]})")
     report.append(
         "\nBenchmark the gaps on a GPU and publish, or pull a revision that already covers them:\n"
-        "  uv run python -m popcorn.bench run --out reports.jsonl\n"
-        "  uv run python -m popcorn.bench merge --publish reports.jsonl\n"
-        "  uv run python -m popcorn.bench pull"
+        "  uv run popcorn bench run --out reports.jsonl\n"
+        "  uv run popcorn bench merge --publish reports.jsonl\n"
+        "  uv run popcorn bench pull"
     )
     raise SystemExit("\n".join(report))
 

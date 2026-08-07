@@ -18,8 +18,8 @@ Maintainer runbook. The proposed next version is `0.2.0`; choose the final versi
 Pull the pinned base, run only missing curve evidence, and merge the new run into the audit:
 
 ```bash
-uv run python -m popcorn.bench pull
-uv run python scripts/bench_sweep.py submit --nodes 6 --curves-only --watch
+uv run popcorn bench pull
+uv run popcorn sweep submit --nodes 6 --curves-only --watch
 uv run python scripts/check_records.py --release \
   --include logs/sweeps/<run>/cache/v3/reports
 ```

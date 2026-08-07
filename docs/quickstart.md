@@ -31,11 +31,11 @@ Set `POPCORN_SKIP_REPORTS=1` to install without reports. Automatic dispatch then
 reference implementation. Refresh the reports with:
 
 ```bash
-uv run python -m popcorn.bench pull
+uv run popcorn bench pull
 ```
 
 Reports apply only to the hardware on which they were recorded. Use
-`python -m popcorn.bench fill` to measure missing cases on the current device. See
+`popcorn bench fill` to measure missing cases on the current device. See
 [Benchmarking](./benchmarking.md) for details.
 
 A backend is eligible only when a supported package version is installed. Automatic dispatch

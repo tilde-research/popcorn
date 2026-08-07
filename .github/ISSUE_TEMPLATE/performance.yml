@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: >
-        The tuner only knows recorded rows: `python -m popcorn.bench view --user`
+        The tuner only knows recorded rows: `popcorn bench view --user`
         shows what your hardware has. No nearby rows means registration-order
         fallback, not a considered choice.
   - type: input
@@ -44,4 +44,4 @@ body:
     attributes:
       label: Recorded rows
       options:
-        - label: My hardware has rows for this op (`python -m popcorn.bench view --user` shows it), so the tuner's pick is based on data.
+        - label: My hardware has rows for this op (`popcorn bench view --user` shows it), so the tuner's pick is based on data.

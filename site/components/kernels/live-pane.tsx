@@ -105,7 +105,7 @@ export function LiveMenu({ kernel, live }: { kernel: string; live: LiveBenchCont
   const rows = live.rowsByOp[kernel] ?? [];
   const port = validLivePort(portText);
   const commandPort = port ?? DEFAULT_LIVE_PORT;
-  const command = `python -m popcorn.bench fill ${kernel} --live${
+  const command = `popcorn bench fill ${kernel} --live${
     commandPort === DEFAULT_LIVE_PORT ? '' : ` ${commandPort}`
   }`;
   const selectedIsRunning = status?.ops.includes(kernel) ?? false;

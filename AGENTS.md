@@ -53,7 +53,7 @@ Start with the narrowest relevant test, then run the applicable handoff checks:
 uv run pytest tests -q
 uv run pyright
 scripts/format.sh
-uv run python -m popcorn.bench run <op> --backend <name>
+uv run popcorn bench run <op> --backend <name>
 ```
 
 Kernel/implementation changes require the full relevant hardware grid with zero `fail`, `crash`, `error`,

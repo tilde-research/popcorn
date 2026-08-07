@@ -12,7 +12,7 @@ npm run dev                             # http://localhost:3000
 To exercise the Local tab, start a benchmark from the repository root in another terminal:
 
 ```bash
-uv run python -m popcorn.bench fill rms_norm --live
+uv run popcorn bench fill rms_norm --live
 ```
 
 Open `http://localhost:3000/kernels?s=rms_norm`, select **Local**, and press **Check**.

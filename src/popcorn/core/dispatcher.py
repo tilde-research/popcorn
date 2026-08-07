@@ -234,6 +234,7 @@ class Dispatcher:
 
         # shape grammar parsed from the annotations
         self.specs = annotations.plans(self._signature)
+        self.output_specs = annotations.return_plans(self._signature)
         self._dims = annotations.dim_names(self.specs)
 
         # test grid metadata — dim pools live in `core/dims.DIMS`, not per-op

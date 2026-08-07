@@ -15,7 +15,7 @@ from popcorn.bench.store import static_allowed
 from popcorn.core.sources import available, unavailable_reason
 
 DEFAULT_NODES = 6
-MAX_NODES = 6
+MAX_NODES = 10
 GPUS_PER_NODE = 8
 
 
@@ -27,6 +27,7 @@ class PhaseSpec:
     extra: str | None = None
     packages: tuple[str, ...] = ()
     build_requirements: bool = False
+    build_env: tuple[tuple[str, str], ...] = ()
 
     @property
     def target(self) -> str:
@@ -34,12 +35,25 @@ class PhaseSpec:
         return f".[{extra}]" if extra else "."
 
 
+FA3_BUILD_ENV = (
+    # Popcorn's FA3 adapters accept only same-head-dimension FP16/BF16 dense and
+    # varlen attention on Hopper. Keep backward, split-K, and grouped-query support.
+    ("FLASH_ATTENTION_DISABLE_SM80", "TRUE"),
+    ("FLASH_ATTENTION_DISABLE_FP8", "TRUE"),
+    ("FLASH_ATTENTION_DISABLE_PAGEDKV", "TRUE"),
+    ("FLASH_ATTENTION_DISABLE_APPENDKV", "TRUE"),
+    ("FLASH_ATTENTION_DISABLE_LOCAL", "TRUE"),
+    ("FLASH_ATTENTION_DISABLE_SOFTCAP", "TRUE"),
+    ("FLASH_ATTENTION_DISABLE_HDIMDIFF64", "TRUE"),
+    ("FLASH_ATTENTION_DISABLE_HDIMDIFF192", "TRUE"),
+)
+
 PHASE_SPECS = (
     PhaseSpec("reference"),
     # wall_attn and nsa reuse FLA utility ops even though their kernels are first-party.
     PhaseSpec("popcorn", extra="fla"),
     PhaseSpec("cudnn"),
-    PhaseSpec("fa3", build_requirements=True),
+    PhaseSpec("fa3", build_requirements=True, build_env=FA3_BUILD_ENV),
     PhaseSpec("fla"),
     # grpo_loss imports transformers at call time without declaring it upstream.
     PhaseSpec("liger", packages=("transformers>=4.52.0,<5",)),
@@ -69,6 +83,7 @@ class SweepConfig:
     qos: str = "staff-prod"
     walltime: str = "24:00:00"
     hardware: str | None = "H100"
+    container_image: str | None = None
     local: bool = False
     nodes: int = DEFAULT_NODES
     curves_only: bool = False
@@ -80,6 +95,8 @@ class SweepConfig:
             raise ValueError("reps and timeout must be positive")
         if not 1 <= self.nodes <= MAX_NODES:
             raise ValueError(f"nodes must be between 1 and {MAX_NODES}")
+        if self.local and self.container_image:
+            raise ValueError("container_image requires a Slurm sweep")
         minutes(self.walltime)
 
     @classmethod
@@ -262,8 +279,15 @@ def estimated(op: Any, case: Any) -> int:
 
 
 def infeasible(op: Any, case: Any, grad: bool, capacity: int) -> bool:
-    """Conservatively reject cases whose inputs alone exceed device capacity."""
-    return estimated(op, case) * (3 if grad else 2) > capacity
+    """Reject cases whose correctness copies cannot leave device headroom.
+
+    The harness holds native inputs for the candidate and budget, fp64 inputs for
+    truth, and the original sample. Backward adds three gradient sets; outputs,
+    saved tensors, and library workspaces need two more native-size allowances.
+    """
+    truth_ratio = max(1, 8 // case.dtype.itemsize)
+    resident_copies = 7 + 2 * truth_ratio if grad else 5 + truth_ratio
+    return estimated(op, case) * resident_copies > capacity
 
 
 def expected_totals(

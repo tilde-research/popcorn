@@ -40,6 +40,9 @@ dependencies = [
 Repository = "https://github.com/tilde-research/popcorn"
 Issues = "https://github.com/tilde-research/popcorn/issues"
 
+[project.scripts]
+popcorn = "popcorn.cli:main"
+
 # One extra per backend, named exactly like the backend; pins mirror declare_backend.
 # There is deliberately no aggregate extra: the backends pin mutually exclusive
 # requirements, so an "everything" install does not resolve.
@@ -114,7 +117,7 @@ ignore = ["F722", "F821"]
 # Typed surface: the dispatcher and harness. Kernel references use jaxtyping and
 # adapters intentionally leave parameters bare (annotations become dispatch gates).
 [tool.pyright]
-include = ["src/popcorn/core", "src/popcorn/bench", "src/popcorn/compile.py"]
+include = ["src/popcorn/core", "src/popcorn/bench", "src/popcorn/cli.py", "src/popcorn/compile.py"]
 exclude = ["**/__pycache__", ".venv"]
 typeCheckingMode = "basic"
 reportMissingImports = false

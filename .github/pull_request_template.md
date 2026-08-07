@@ -20,7 +20,7 @@
 ## Results
 
 <!-- For kernels, backends, and reports: paste the matrix row(s) printed by
-     `python -m popcorn.bench run <op>` (pass/skip counts, speedups, peak memory). -->
+     `popcorn bench run <op>` (pass/skip counts, speedups, peak memory). -->
 
 ## Checklist
 

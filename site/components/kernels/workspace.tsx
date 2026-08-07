@@ -38,10 +38,10 @@ function benchmarkSnippet(k: Kernel): string {
 
 function localSnippet(k: Kernel): string {
   return [
-    `python -m popcorn.bench fill ${k.name} --live`,
+    `popcorn bench fill ${k.name} --live`,
     '',
     `# use another port`,
-    `python -m popcorn.bench fill ${k.name} --live 9000`,
+    `popcorn bench fill ${k.name} --live 9000`,
   ].join('\n');
 }
 

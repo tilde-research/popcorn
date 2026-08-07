@@ -56,15 +56,15 @@ The suite is three tiers, one directory each, and CI runs them as separate jobs:
 Backends pin mutually exclusive requirements and some patch torch on import, so a single environment holding
 all of them tests a configuration no user has. `scripts/per_backend.sh pytest tests/kernels -q` reproduces the
 per-backend loop locally; pairs whose library is absent report as skipped rather than passing silently.
-CI never runs benchmarks — that is `python -m popcorn.bench`, on a GPU.
+CI never runs benchmarks — that is `popcorn bench`, on a GPU.
 
 Reports are evidence, not source: they live in the [popcorn-reports](https://huggingface.co/datasets/tilde-research/popcorn-reports)
 dataset rather than in git, so history does not carry hundreds of megabytes of Parquet. Any build — wheel or
 editable — fetches the revision pinned in `src/popcorn/reports/REVISION`, which is what makes a checkout
-reproducible. `POPCORN_SKIP_REPORTS=1` builds without them, and `python -m popcorn.bench pull` refetches on
+reproducible. `POPCORN_SKIP_REPORTS=1` builds without them, and `popcorn bench pull` refetches on
 demand; with no rows, every call resolves to the torch reference and popcorn says so.
 
-`python -m popcorn.bench fill` pairwise-covers every declared dimension, dtype, scalar argument, and optional
+`popcorn bench fill` pairwise-covers every declared dimension, dtype, scalar argument, and optional
 input, then writes missing timings to the user cache that dispatch reads alongside the shipped rows. Cases run
 from smaller to larger shapes. Once a case OOMs, only cases that are at least as large in every dimension in
 the same dtype/argument/presence stratum are pruned. Lowering one dimension while raising another remains
@@ -171,7 +171,7 @@ All tags live in `src/popcorn/core/tags.py` — read it before tagging, and add 
 - `predicate`: `f(**args) -> bool` veto, last resort (poison-avoidance, not shape ranges)
 - `forward_only`: `True` for kernels without a usable backward, including decode/inference-oriented implementations — a step-wise decode kernel that can serve the parent's signature registers on the op it computes (fla's `fused_recurrent_*` forms take full sequences, so they are `fla:recurrent` on the same op as `chunk_*`), never as a separate `*_decode` op. The one exception is a step kernel whose contract cannot fit the parent — no seq axis, explicit state in/out (`mesa_net_decode`) — which becomes its own op with the state in its signature. The dispatcher considers a forward-only backend only when no gradient can flow (grad disabled, or no input requires grad); otherwise the call falls through to the remaining backends and the torch reference. The harness grades them forward-only
 
-Shape validity is learned from report rows (`python -m popcorn.bench map`), not declared. Dim probe pools live only in `DIMS` (`popcorn/core/dims.py`); the fitter turns pass/fail/oom labels into regions. Scalar kwargs are classified once in `popcorn/core/args.py` (`SPEED_ARGS` vs `NEUTRAL_ARGS`): discrete values exact-match in the validity stratum, floats fit as `Real` bands like dims, and only `SPEED_ARGS` participate in timing nearest-neighbor.
+Shape validity is learned from report rows (`popcorn bench map`), not declared. Dim probe pools live only in `DIMS` (`popcorn/core/dims.py`); the fitter turns pass/fail/oom labels into regions. Scalar kwargs are classified once in `popcorn/core/args.py` (`SPEED_ARGS` vs `NEUTRAL_ARGS`): discrete values exact-match in the validity stratum, floats fit as `Real` bands like dims, and only `SPEED_ARGS` participate in timing nearest-neighbor.
 
 Dispatch admission and ranking live on `op.tuner.policy` (`popcorn.core.policy.Policy`). The default is safe (outside a fitted region → torch). `unsafe=True` on the call (or `POPCORN_UNSAFE=1`) extrapolates for backends that already have a proven range, then picks the nearest timed neighbor — replace or subclass `Policy` to change that.
 
@@ -214,7 +214,7 @@ The `popcorn` backend is declared once, on the compiler it is written in (`trito
 To inspect a kernel under Nsight Compute:
 
 ```bash
-python -m popcorn.impls._profile swiglu hidden=4096 --batch 8,2048 --dtype bfloat16 --grad
+popcorn profile swiglu hidden=4096 --batch 8,2048 --dtype bfloat16 --grad
 ```
 
 It builds one case (`name=value` overrides a dim or scalar argument, `+name` enables an optional tensor, everything else defaults to the largest tested size), warms up so JIT builds and autotuning stay out of the capture, and re-runs itself under `ncu` with profiling scoped to the final call. `--set full` for the deep-dive sections, `--kernel <regex>` to filter launches, `--out report` to write an `.ncu-rep` for the GUI instead of printing to stdout. In your own scripts, wrap the region in `popcorn.impls._profile.annotate()` and run under `ncu --profile-from-start off`.
@@ -260,9 +260,9 @@ Add the project to the Acknowledgement list in [README.md](README.md).
 
 ```bash
 uv run pytest tests -q
-uv run python -m popcorn.bench run [ops...] [--backend NAME] [--device cuda] [--hardware H100] [--reps 10] [--limit N] [--shard I/K]
-uv run python -m popcorn.bench submit [ops...] [--array 8] [--reps 10] [--limit N] [--qos NAME] [--hardware H100] [--time 2:00:00] [--dry-run]
-uv run python -m popcorn.bench view [--user] [--out index.html]
+uv run popcorn bench run [ops...] [--backend NAME] [--device cuda] [--hardware H100] [--reps 10] [--limit N] [--shard I/K]
+uv run popcorn bench submit [ops...] [--array 8] [--reps 10] [--limit N] [--qos NAME] [--hardware H100] [--time 2:00:00] [--dry-run]
+uv run popcorn bench view [--user] [--out index.html]
 ```
 
 `scripts/bench_hardware.py` wraps `run` for the common case: the shared case plan for every op on the current machine. `scripts/update_readme.py` regenerates the badges without running anything.
@@ -289,24 +289,38 @@ A crash does not prune, being as likely a tile-boundary bug as a limit. Pruning 
 the observation remains the only evidence, and dominated cases are simply left unmeasured. Run each backend
 in its isolated environment so package collisions cannot affect the records.
 
-For the complete H100 database sweep, use `uv run python scripts/bench_sweep.py submit --nodes 6 --watch`.
-`--nodes` defaults to 6 and cannot exceed 6. The command queues one exclusive singleton-named submitit job
+For the complete H100 database sweep, use `uv run popcorn sweep submit --nodes 6 --watch`.
+`--nodes` defaults to 6 and cannot exceed 10. The command queues one exclusive singleton-named submitit job
 with eight GPU workers per node, records references first, then wipes and reinstalls one isolated environment
 for each backend in a fixed sequence. It skips `fa3` with a message when `nvcc` cannot compile against torch's
 CUDA. The shared case plan combines sparse pairwise coverage with named production and long-context curves,
-drops cases whose inputs alone exceed device memory, and runs each stratum cheapest first so frontiers meet
-their boundary before paying for what lies beyond it. Static adapter gates remove impossible dtype and scalar
+drops cases whose native and fp64 correctness copies cannot leave workspace headroom, and runs each stratum
+cheapest first so frontiers meet their boundary before paying for what lies beyond it. Static adapter gates remove impossible dtype and scalar
 cases from both backend and reference work. Workers run cases in process: a crash costs one case (a
 sentinel converts it to a `crash` row on restart) and a hang one watchdog budget (`timeout`).
 References cap that budget at 60 seconds; backend budgets retain the configured compile floor and may
 grow with input size.
-The sweep records fp16 frontier cases forward-only when backward would reduce more than 32K positions into a
-broadcast input, since that accumulated gradient cannot be represented in fp16.
+The sweep records fp16 cases forward-only when backward would reduce 32K or more output positions into an input.
+It derives that fanout from input and output shape annotations and retains the temporal-axis check for unresolved
+output shapes, since an oversized accumulated gradient cannot be represented in fp16.
 Near walltime the job drains, merges, and resubmits itself; planning is idempotent, so any attempt skips finished work,
-and `uv run python scripts/bench_sweep.py resume [logs/sweeps/<run>] --watch` is the same operation by hand. Exact
+and `uv run popcorn sweep resume [logs/sweeps/<run>] --watch` is the same operation by hand. Exact
 reference timings are reused across phases, but reference correctness still runs for every implementation.
 The sweep never publishes. `merge --scrub-incomplete` drops rows the harness scheduled but never measured.
 For a targeted release fill, add `--curves-only`; cached curve rows are still skipped.
+
+On a Pyxis-enabled Slurm cluster, use a CUDA 13-only development image when the host exposes CUDA 12
+or an older `nvcc`. This gives `cudnn` one runtime major and gives `fa3` Git plus a compiler matching Torch:
+
+```bash
+uv run popcorn sweep resume logs/sweeps/<run> \
+  --container-image 'nvcr.io#nvidia/pytorch:25.09-py3' --watch
+```
+
+The container mounts the user's home directory, keeps the repository as its working directory, and is
+included in the reusable phase-environment fingerprint. `--container-image` is unavailable with `--local`.
+The H100 sweep also limits FA3's source build to the FP16/BF16 dense and varlen features its adapters expose;
+it does not compile SM80, FP8, paged/append-KV, local-window, softcap, or unequal-head-dimension variants.
 
 Before any case runs, `run` and `map` pin the target: a bare `--device cuda` resolves to the current index (`cuda:0`), a CUDA request with no visible GPU is an error rather than a silent CPU run, and the resolved device name is printed. Hardware is stamped from that live device, so pass `--hardware H100` to abort when the machine you landed on is not the one you meant to record. `submit` forwards the gate to every array task.
 
@@ -326,10 +340,10 @@ A successful row may also have `bench_error`; correctness remains valid, but the
 
 `op.validate(*args, backend=None, **kwargs)` checks a real call without timing. `op.benchmark(*args, backend=None, **kwargs)` checks and times it. Both return one `Record` per eligible backend, so `popcorn.bench.report(record)` prints a labelled latency, memory, and error block; `record.result` holds the raw status and gauges. These APIs write `${POPCORN_CACHE_DIR:-${XDG_CACHE_HOME:-~/.cache}/popcorn}/v<schema>/reports`, where `<schema>` is the current report schema version, and never modify checked-in reports or the README.
 
-Automatic dispatch admits a backend only with an exact pass row or membership in a fitted validity region (derived from report rows). Otherwise the reference serves the call. `POPCORN_BENCH=1` lazily measures and records on first encounter. Map regions with `python -m popcorn.bench map --effort standard`.
+Automatic dispatch admits a backend only with an exact pass row or membership in a fitted validity region (derived from report rows). Otherwise the reference serves the call. `POPCORN_BENCH=1` lazily measures and records on first encounter. Map regions with `popcorn bench map --effort standard`.
 
 > [!TIP]
-> Publish a local Parquet store with `python -m popcorn.bench publish`, or fold shard JSONL and publish in one step with `python -m popcorn.bench merge --publish <shards...>`. The dataset commit is written into `REVISION` — that pin is what you commit. Reports and README badges are machine-written, never edit them by hand. User-local cache rows stay JSONL and are not published.
+> Publish a local Parquet store with `popcorn bench publish`, or fold shard JSONL and publish in one step with `popcorn bench merge --publish <shards...>`. The dataset commit is written into `REVISION` — that pin is what you commit. Reports and README badges are machine-written, never edit them by hand. User-local cache rows stay JSONL and are not published.
 
 > [!NOTE]
 > → Zero fail, zero crash, zero error, and zero benchmark error: [6. Submit](#6-submit)

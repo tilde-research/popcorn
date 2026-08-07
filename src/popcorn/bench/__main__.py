@@ -646,8 +646,8 @@ def cmd_submit(args: argparse.Namespace) -> None:
     )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(prog="python -m popcorn.bench", description="Popcorn correctness + benchmark harness.")
+def main(prog: str = "python -m popcorn.bench") -> None:
+    parser = argparse.ArgumentParser(prog=prog, description="Popcorn correctness + benchmark harness.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser("run", help="run the shared case plan locally (or one shard of it)")

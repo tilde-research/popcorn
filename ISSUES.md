@@ -10,7 +10,7 @@ region and the support matrix reports it honestly.
 Reproduce any entry with:
 
 ```bash
-uv run python -m popcorn.bench run <op> --backend <backend>
+uv run popcorn bench run <op> --backend <backend>
 ```
 
 ## bit_linear / fla

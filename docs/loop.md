@@ -14,11 +14,11 @@ validation grid.
 ## Workflow
 
 ```bash
-python -m popcorn.bench.loop targets
+popcorn loop targets
 git checkout -b loop/<op>
 # Edit and commit one candidate change.
-python -m popcorn.bench.loop try <op> --tag exp1 --note "<what changed>"
-python -m popcorn.bench.loop status <op>
+popcorn loop try <op> --tag exp1 --note "<what changed>"
+popcorn loop status <op>
 ```
 
 The candidate is `src/popcorn/impls/<op>_tl.py` or `<op>_cu.py`. It must export a callable
@@ -32,7 +32,7 @@ Keep each experiment to one committed change. Exit code `0` means keep the chang
 ## Evaluate
 
 ```bash
-python -m popcorn.bench.loop try rms_norm --cases 4 --reps 5 --vs liger --tag exp7
+popcorn loop try rms_norm --cases 4 --reps 5 --vs liger --tag exp7
 ```
 
 - **Sample:** `--cases N` selects deterministic cases. Comparisons use kept rows with the
@@ -56,7 +56,7 @@ where `<schema>` is the report schema version. Do not commit this log.
 ## Select targets
 
 ```bash
-python -m popcorn.bench.loop targets --hardware H100 --top 15
+popcorn loop targets --hardware H100 --top 15
 ```
 
 The command ranks operations by recorded performance headroom:
@@ -76,7 +76,7 @@ Prioritize operations with no records, speedups near 1x, or low gradient coverag
 ## Review history
 
 ```bash
-python -m popcorn.bench.loop status rms_norm --last 8
+popcorn loop status rms_norm --last 8
 ```
 
 The status includes experiment and keep counts, the current revert streak, the best kept
