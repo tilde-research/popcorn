@@ -307,7 +307,6 @@ function SliceExplorer({
   kernels: Kernel[];
   liveRows: Record<string, LiveRow[]>;
 }) {
-  const kernelKey = kernels.map((kernel) => `${kernel.name}:${kernel.evidence.freshness.latest}`).join('|');
   const controls = useMemo(() => sliceControlsFor(kernels), [kernels]);
   const published = useMemo(
     () => new Map(kernels.map((kernel) => [kernel.name, rowsForKernel(kernel)])),
@@ -316,10 +315,6 @@ function SliceExplorer({
   const allRows = useMemo(() => [...published.values()].flat(), [published]);
   const defaults = useMemo(() => defaultSliceSelection(kernels, controls), [kernels, controls]);
   const [selection, setSelection] = useState<SliceSelection>(() => defaults);
-
-  useEffect(() => {
-    setSelection(defaults);
-  }, [kernelKey, defaults]);
 
   const valid = <T,>(value: T, pool: T[], fallback: T): T => (pool.includes(value) ? value : fallback);
   const tentative: SliceSelection = {
@@ -724,7 +719,8 @@ export function PlotPane({
           onDevice={(device) => setSelection((state) => ({ ...state, device }))}
         />
       ) : normalized.mode === 'slices' ? (
-        <SliceExplorer kernels={kernels} liveRows={liveRows} />
+        // Live rows rerender this pane; remount slice state only when the published kernel selection changes.
+        <SliceExplorer key={kernelKey} kernels={kernels} liveRows={liveRows} />
       ) : options.length === 0 ? (
         <Empty message="No curve has the same measured context and hardware across these kernels. Compare their coverage samples or select one kernel." />
       ) : (
