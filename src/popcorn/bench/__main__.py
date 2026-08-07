@@ -40,7 +40,7 @@ from popcorn.bench.sweep import estimated, infeasible
 from popcorn.bench.viewer import render
 from popcorn.core.config import device_name
 from popcorn.core.dispatcher import Dispatcher, Implementation
-from popcorn.core.sources import available, installed_version
+from popcorn.core.sources import available, installed_version, unavailable_reason
 
 SBATCH = """\
 #!/bin/bash
@@ -63,6 +63,7 @@ mkdir -p "$TRITON_CACHE_DIR"
 """
 
 HARDWARE_HELP = "fail unless the resolved device name contains this substring (e.g. H100)"
+LIVE_CACHE_WAIT = 10.0
 
 
 def _positive(value: str) -> int:
@@ -521,7 +522,11 @@ def cmd_fill(args: argparse.Namespace) -> None:
     )
     work = [(op, impl, case) for op, impl, case in planned if available(impl)]
     if not work:
-        raise SystemExit("no matching installed non-torch backend cases")
+        reasons = sorted(
+            reason for impl in {impl for _, impl, _ in planned} if (reason := unavailable_reason(impl)) is not None
+        )
+        detail = "".join(f"\n  {reason}" for reason in reasons)
+        raise SystemExit(f"no matching installed non-torch backend cases{detail}")
     current = _usable_records(store, work, device)
     cached = {} if args.force else _record_index(current)
     frontiers: dict[tuple[str, str, bool], BudgetFrontier] = {}
@@ -543,10 +548,14 @@ def cmd_fill(args: argparse.Namespace) -> None:
         else sys.maxsize
     )
     todo = []
+    cached_records = []
     skipped = 0
     for op, impl, case in work:
         grad = not _impl(op, impl).forward_only and backward_safe(op, case)
-        if not _fill_pending(cached.get((op.name, impl, case.case_id, grad))):
+        previous = cached.get((op.name, impl, case.case_id, grad))
+        if not _fill_pending(previous):
+            assert previous is not None
+            cached_records.append(previous)
             continue
         reference_frontier = reference_frontiers.get((op.name, grad))
         if infeasible(op, case, grad, capacity) or (
@@ -556,20 +565,17 @@ def cmd_fill(args: argparse.Namespace) -> None:
             continue
         todo.append((op, impl, case, grad))
     todo.sort(key=lambda item: estimated(item[0], item[2]))
-    cached_count = len(work) - len(todo) - skipped
+    cached_count = len(cached_records)
     print(
         f"{len(work)} case-impl pairs: {cached_count} already cached, {skipped} infeasible or reference-pruned, {len(todo)} to consider"
     )
     isolation = "in-process" if args.in_process else f"{args.timeout}s/case worker"
-    if not todo:
-        return
-    print(f"measuring with monotonic budget pruning ({isolation}) -> {store.user}")
     live = None
-    if getattr(args, "live", None) is not None:
+    if getattr(args, "live", None) is not None and (todo or cached_records):
         live = LiveServer(
             args.live,
             device=device,
-            ops=sorted({op.name for op, _, _, _ in todo}),
+            ops=sorted({op.name for op, _, _ in work}),
             total=len(todo),
             cached=cached_count,
             skipped=skipped,
@@ -578,7 +584,21 @@ def cmd_fill(args: argparse.Namespace) -> None:
             live.start()
         except OSError as error:
             raise SystemExit(f"could not bind live benchmark server to 127.0.0.1:{args.live}: {error}") from None
+        for record in cached_records:
+            live.replay_record(record)
         print(f"streaming live results at http://{live.host}:{live.port}")
+        if cached_records:
+            print(f"serving {cached_count} cached row(s) for up to {LIVE_CACHE_WAIT:g}s")
+            try:
+                live.wait_for_subscriber(LIVE_CACHE_WAIT)
+            except BaseException as error:
+                live.close(error)
+                raise
+    if not todo:
+        if live is not None:
+            live.close()
+        return
+    print(f"measuring with monotonic budget pruning ({isolation}) -> {store.user}")
     pending: list[Record] = []
     tally: Counter[str] = Counter()
     pruned = 0

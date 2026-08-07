@@ -416,8 +416,17 @@ function SliceExplorer({
         const exact = measuredSlices(published.get(kernel.name) ?? [], selected).find(
           (slice) => slice.key === currentSlice.key,
         );
+        const backends = [...new Set(kernel.impls.map((impl) => impl.name.split(':')[0]))].filter(
+          (name) => name !== 'torch',
+        );
         return exact
-          ? [{ kernel: kernel.name, command: sliceFillCommand(kernel.name, selected.x, selected.dtype, exact) }]
+          ? [
+              {
+                kernel: kernel.name,
+                command: sliceFillCommand(kernel.name, selected.x, selected.dtype, exact),
+                requiredBackends: backends.includes('popcorn') ? [] : backends,
+              },
+            ]
           : [];
       })
     : [];
@@ -754,12 +763,17 @@ export function PlotPane({
   );
 }
 
-function AddSliceData({ commands }: { commands: { kernel: string; command: string }[] }) {
+function AddSliceData({
+  commands,
+}: {
+  commands: { kernel: string; command: string; requiredBackends: string[] }[];
+}) {
   const [open, setOpen] = useState(false);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'selected' | 'failed'>('idle');
   const panel = useRef<HTMLDivElement>(null);
   const commandBlock = useRef<HTMLDivElement>(null);
   const text = commands.map(({ command }) => command).join('\n');
+  const requiredBackends = [...new Set(commands.flatMap(({ requiredBackends }) => requiredBackends))];
 
   useEffect(() => {
     setCopyState('idle');
@@ -846,9 +860,19 @@ function AddSliceData({ commands }: { commands: { kernel: string; command: strin
             </button>
           </div>
           <p className="text-fd-muted-foreground">
-            Fills missing production points for this exact slice; cached rows are skipped and{' '}
-            <code className="font-mono text-fd-foreground">--live</code> adds each result here.
+            Replays fingerprint-matching cached rows immediately, then fills missing production points for this
+            exact slice. <code className="font-mono text-fd-foreground">--live</code> adds each result here, and the
+            longer timeout leaves room for first-time backend compilation.
           </p>
+          {requiredBackends.length > 0 && (
+            <p className="text-fd-muted-foreground">
+              Requires one matching backend extra locally:{' '}
+              <code className="font-mono text-fd-foreground">
+                {requiredBackends.map((backend) => `popcorn[${backend}]`).join(' or ')}
+              </code>
+              .
+            </p>
+          )}
           <p aria-live="polite" className="sr-only">
             {copyState === 'copied'
               ? 'Command copied'

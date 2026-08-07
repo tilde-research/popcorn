@@ -174,7 +174,7 @@ test('slice controls restore exact batch, argument, dimension, and pass filterin
   assert.deepEqual(base.argValues, { causal: false });
   assert.equal(
     sliceFillCommand(item.name, defaults.x, defaults.dtype, base),
-    "popcorn bench fill attention --live --slice seq dtype=float32 '...=[1]' kv_heads=2 q_heads=8 causal=false",
+    "popcorn bench fill attention --live --timeout 300 --slice seq dtype=float32 '...=[1]' kv_heads=2 q_heads=8 causal=false",
   );
   const destination = closestMeasuredSlice(slices, defaults, {
     kind: 'dim',

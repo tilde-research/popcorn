@@ -86,13 +86,16 @@ rows appear as highlighted points on the corresponding plots.
 In the **Slices** view, **Add data** generates a command for the selected slice:
 
 ```bash
-popcorn bench fill rms_norm --live --slice normalized_shape dtype=float16 '...=[8]' eps=0.000001
+popcorn bench fill rms_norm --live --timeout 300 --slice normalized_shape dtype=float16 '...=[8]' eps=0.000001
 ```
 
 The slice form varies only the named x axis over its production pool while preserving the
-displayed dtype, batch, dimensions, scalar arguments, and optional inputs. It skips rows already
-cached on the current device. If a validity repair would change one of those fixed values, that
-point belongs to another slice and is omitted rather than silently changing the requested context.
+displayed dtype, batch, dimensions, scalar arguments, and optional inputs. Fingerprint-matching
+rows cached on the current device are streamed immediately before missing points run; an all-cached
+session waits briefly for the site to connect. If a validity repair would change one of those fixed
+values, that point belongs to another slice and is omitted rather than silently changing the
+requested context. The generated timeout leaves room for a backend's first compilation; the CLI
+also names the required backend extra when none of the kernel's implementations are installed.
 
 Use the same custom port on both sides when 8765 is unavailable:
 

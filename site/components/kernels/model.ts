@@ -546,7 +546,7 @@ export function sliceFillCommand(kernel: string, axis: string, dtype: string, sl
       .map(([name, value]) => `${name}=${JSON.stringify(value)}`),
     ...[...slice.presentValues].sort().map((name) => `+${name}`),
   ];
-  return ['popcorn', 'bench', 'fill', kernel, '--live', '--slice', axis, ...context]
+  return ['popcorn', 'bench', 'fill', kernel, '--live', '--timeout', '300', '--slice', axis, ...context]
     .map(shellQuote)
     .join(' ');
 }

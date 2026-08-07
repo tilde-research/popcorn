@@ -12,6 +12,7 @@ from popcorn.bench.__main__ import cmd_fill, main
 from popcorn.bench.grid import cases
 from popcorn.bench.live import PROTOCOL, SERVICE, LiveServer
 from popcorn.bench.model import Environment, Record, Result
+from popcorn.core.config import device_name
 
 ORIGIN = "https://tilde-research.github.io"
 
@@ -232,6 +233,23 @@ def test_live_replay_is_bounded_and_error_state_is_retained():
     assert live.status()["error"] == "RuntimeError: benchmark stopped"
 
 
+def test_cached_record_replay_does_not_count_as_new_measurement():
+    live = LiveServer(0, device="Test GPU", ops=["alpha"], total=0, cached=1)
+    record = _record("alpha", "cached")
+    assert not live.wait_for_subscriber(0)
+
+    live.replay_record(record)
+    subscriber, status, replay = live.subscribe("alpha")
+    live.unsubscribe(subscriber)
+    live.close()
+
+    assert live.wait_for_subscriber(0)
+    assert status["completed"] == status["measured"] == 0
+    assert status["cached"] == 1
+    assert status["op_statuses"] == {"alpha": {"pass": 1}}
+    assert [event[1]["record"]["case_id"] for event in replay] == ["cached"]
+
+
 def test_fill_emits_each_record_to_the_live_session(monkeypatch, tmp_path):
     op = KERNELS["rms_norm"]
     backend = next(name for name in op.available_backends() if name != "torch")
@@ -301,4 +319,83 @@ def test_fill_emits_each_record_to_the_live_session(monkeypatch, tmp_path):
     assert started["ops"] == [op.name]
     assert started["total"] == 1
     assert emitted == written == [record]
+    assert closed == [None]
+
+
+def test_fill_replays_matching_cache_even_when_nothing_needs_measurement(monkeypatch, tmp_path):
+    op = KERNELS["rms_norm"]
+    backend = next(name for name in op.available_backends() if name != "torch")
+    case = cases(op, limit=1)[0]
+    record = _record(op.name)
+    record.impl = backend
+    record.case = str(case)
+    record.case_id = case.case_id
+    record.config = case.config()
+    replayed = []
+    closed = []
+    waited = []
+    started = {}
+
+    class FakeStore:
+        user = tmp_path
+
+        def write_user(self, records):
+            raise AssertionError("cached records must not be rewritten")
+
+    class FakeLive:
+        host = "127.0.0.1"
+
+        def __init__(self, port, **metadata):
+            self.port = port
+            started.update(port=port, **metadata)
+
+        def start(self):
+            started["running"] = True
+            return self
+
+        def replay_record(self, cached):
+            replayed.append(cached)
+
+        def wait_for_subscriber(self, timeout):
+            waited.append(timeout)
+            return True
+
+        def close(self, error=None):
+            closed.append(error)
+
+    monkeypatch.setitem(cmd_fill.__globals__, "Store", FakeStore)
+    monkeypatch.setitem(cmd_fill.__globals__, "LiveServer", FakeLive)
+    monkeypatch.setitem(cmd_fill.__globals__, "_work", lambda *args: [(op, backend, case)])
+    monkeypatch.setitem(cmd_fill.__globals__, "_usable_records", lambda *args: [record])
+    monkeypatch.setitem(cmd_fill.__globals__, "available", lambda impl: True)
+    monkeypatch.setitem(cmd_fill.__globals__, "backward_safe", lambda *args: False)
+    monkeypatch.setattr(op.bench, "run_case", lambda *args, **kwargs: pytest.fail("cache should be replayed"))
+
+    cmd_fill(
+        Namespace(
+            ops=[op.name],
+            backend=backend,
+            limit=1,
+            device="cpu",
+            hardware=None,
+            force=False,
+            in_process=True,
+            timeout=30,
+            reps=1,
+            flush=10,
+            live=8765,
+        )
+    )
+
+    assert started == {
+        "port": 8765,
+        "device": device_name("cpu"),
+        "ops": [op.name],
+        "total": 0,
+        "cached": 1,
+        "skipped": 0,
+        "running": True,
+    }
+    assert replayed == [record]
+    assert waited == [cmd_fill.__globals__["LIVE_CACHE_WAIT"]]
     assert closed == [None]

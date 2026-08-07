@@ -115,6 +115,29 @@ export function useLiveBench(): LiveBenchController {
   }, [scan]);
 
   useEffect(() => {
+    const shouldDiscover =
+      (streamState === 'idle' && probe?.kind === 'offline') || streamState === 'complete';
+    const port = validLivePort(portText);
+    if (!shouldDiscover || port === null) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const discover = async () => {
+      const result = await probeLive(port);
+      if (cancelled) return;
+      if (result.kind === 'popcorn' && result.status.session !== sessionRef.current) {
+        await scan(port);
+        return;
+      }
+      timer = setTimeout(() => void discover(), 1000);
+    };
+    timer = setTimeout(() => void discover(), 1000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [portText, probe?.kind, scan, streamState]);
+
+  useEffect(() => {
     if (connectedPort === null) return;
     let source: EventSource;
     try {

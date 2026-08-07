@@ -149,7 +149,8 @@ export function LiveMenu({ kernel, live }: { kernel: string; live: LiveBenchCont
         <p className="text-xs">{connectionText(probe, streamState, portText)}</p>
         <code className="mt-2 block overflow-x-auto rounded bg-fd-muted px-2.5 py-2 text-[11px]">{command}</code>
         <p className="mt-1.5 text-[11px] text-fd-muted-foreground">
-          The server exists only while this command is running. Add <code>--force</code> to remeasure cached cases.
+          Matching cached rows are replayed immediately. Add <code>--force</code> only when you want to remeasure
+          them.
         </p>
       </div>
 

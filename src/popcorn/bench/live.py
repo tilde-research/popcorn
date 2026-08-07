@@ -169,6 +169,7 @@ class _Handler(BaseHTTPRequestHandler):
             pass
         finally:
             self.server.session.unsubscribe(subscriber)
+            self.close_connection = True
 
 
 class LiveServer:
@@ -210,6 +211,7 @@ class LiveServer:
             lambda: deque(maxlen=self._replay_size)
         )
         self._subscribers: list[_Subscriber] = []
+        self._subscriber_connected = threading.Event()
         self._lock = threading.RLock()
         self._server: _HTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -273,6 +275,7 @@ class LiveServer:
         with self._lock:
             subscriber = _Subscriber(op)
             self._subscribers.append(subscriber)
+            self._subscriber_connected.set()
             if op is None:
                 replay = [event for records in self._records.values() for event in records]
             else:
@@ -297,17 +300,29 @@ class LiveServer:
     def _progress_unlocked(self) -> None:
         self._emit_unlocked("progress", self._status_unlocked())
 
+    def _record_unlocked(self, record: Record) -> None:
+        outcome = "bench_error" if record.result.bench_error else record.result.status
+        self.statuses[outcome] += 1
+        self.op_statuses[record.op][outcome] += 1
+        payload = {"record": record.to_dict()}
+        sequence = self._emit_unlocked("record", payload, record.op)
+        self._records[record.op].append((sequence, payload))
+
+    def replay_record(self, record: Record) -> None:
+        """Expose a matching cached row without counting it as a new measurement."""
+        with self._lock:
+            self._record_unlocked(record)
+
     def record(self, record: Record) -> None:
         with self._lock:
             self.completed += 1
             self.measured += 1
-            outcome = "bench_error" if record.result.bench_error else record.result.status
-            self.statuses[outcome] += 1
-            self.op_statuses[record.op][outcome] += 1
-            payload = {"record": record.to_dict()}
-            sequence = self._emit_unlocked("record", payload, record.op)
-            self._records[record.op].append((sequence, payload))
+            self._record_unlocked(record)
             self._progress_unlocked()
+
+    def wait_for_subscriber(self, timeout: float) -> bool:
+        """Wait briefly for the website to attach to a cache-only session."""
+        return self._subscriber_connected.wait(timeout)
 
     def pruned(self) -> None:
         with self._lock:

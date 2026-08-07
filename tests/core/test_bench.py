@@ -619,6 +619,30 @@ def test_fill_retains_stable_skip_and_exhausted_evidence():
     assert _fill_pending(_record("error"))
 
 
+def test_fill_explains_which_backend_extra_is_missing(monkeypatch):
+    op = _op()
+    case = Case((("D", 4),), (), torch.float32, (), frozenset())
+    monkeypatch.setitem(cmd_fill.__globals__, "Store", object)
+    monkeypatch.setitem(cmd_fill.__globals__, "_work", lambda *args: [(op, "fla", case)])
+    monkeypatch.setitem(cmd_fill.__globals__, "available", lambda impl: False)
+    monkeypatch.setitem(
+        cmd_fill.__globals__,
+        "unavailable_reason",
+        lambda impl: "implementation 'fla' needs 'flash-linear-attention'; install popcorn[fla]",
+    )
+
+    with pytest.raises(SystemExit, match=r"install popcorn\[fla\]"):
+        cmd_fill(
+            Namespace(
+                ops=[],
+                backend=None,
+                limit=None,
+                device="cpu",
+                hardware=None,
+            )
+        )
+
+
 def test_fill_prunes_dominated_oom_shapes_but_runs_mixed_tradeoffs(monkeypatch, tmp_path):
     op = _op()
 
