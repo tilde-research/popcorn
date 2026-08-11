@@ -243,6 +243,17 @@ def test_sweep_config_round_trips_container_and_rejects_invalid_execution_modes(
         SweepConfig(local=True, container_image="cuda:13")
 
 
+def test_submit_accepts_a_blackwell_hardware_gate(tmp_path, monkeypatch):
+    submitted = []
+    monkeypatch.setattr(sweep, "_fresh_run", lambda: tmp_path)
+    monkeypatch.setattr(sweep, "_submit", lambda run, config, dry_run, revalidate: submitted.append((run, config)))
+    monkeypatch.setattr(sweep.sys, "argv", ["bench_sweep.py", "submit", "--hardware", "B200", "--dry-run"])
+
+    sweep.main()
+
+    assert submitted == [(tmp_path, SweepConfig(hardware="B200"))]
+
+
 def test_walltime_parses_slurm_and_minute_forms():
     assert sweep._minutes("24:00:00") == 1440
     assert sweep._minutes("01:30:30") == 91

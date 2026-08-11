@@ -289,7 +289,13 @@ A crash does not prune, being as likely a tile-boundary bug as a limit. Pruning 
 the observation remains the only evidence, and dominated cases are simply left unmeasured. Run each backend
 in its isolated environment so package collisions cannot affect the records.
 
-For the complete H100 database sweep, use `uv run popcorn sweep submit --nodes 6 --watch`.
+For a complete database sweep, name the target GPU explicitly:
+
+```bash
+uv run popcorn sweep submit --nodes 6 --hardware H100 --watch
+uv run popcorn sweep submit --nodes 10 --hardware B200 --watch  # or B300
+```
+
 `--nodes` defaults to 6 and cannot exceed 10. The command queues one exclusive singleton-named submitit job
 with eight GPU workers per node, records references first, then wipes and reinstalls one isolated environment
 for each backend in a fixed sequence. It skips `fa3` with a message when `nvcc` cannot compile against torch's

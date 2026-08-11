@@ -2,12 +2,12 @@
 """Popcorn benchmark sweep: one submitit job, one isolated backend at a time, resumable.
 
 Usage:
-    uv run popcorn sweep submit [--nodes N] [--curves-only] [--watch]
+    uv run popcorn sweep submit [--nodes N] [--hardware GPU] [--curves-only] [--watch]
     uv run popcorn sweep resume [RUN] [--watch]
     uv run popcorn sweep watch [RUN]
     uv run popcorn sweep status [RUN]
 
-A single Slurm job (`--nodes`, capped at 6, with 8 GPUs each) walks
+A single Slurm job (`--nodes`, capped at 10, with 8 GPUs each) walks
 the phases in order: torch references first, then each backend family in a freshly
 installed environment. Task 0 coordinates: it builds each phase environment, plans
 worker manifests from the current store (cached rows skipped, infeasible shapes dropped,
@@ -1186,7 +1186,7 @@ def _phase_list(names: list[str] | None) -> list[str]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=f"Resumable isolated-backend sweep on at most {MAX_NODES} H100 nodes.")
+    parser = argparse.ArgumentParser(description=f"Resumable isolated-backend sweep on at most {MAX_NODES} GPU nodes.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def submission_flags(command: argparse.ArgumentParser) -> None:
@@ -1195,6 +1195,10 @@ def main() -> None:
         command.add_argument("--time", help="walltime per attempt (default 24:00:00); drained work resubmits itself")
         command.add_argument("--reps", type=_positive)
         command.add_argument("--timeout", type=_positive, help="per-case watchdog floor in seconds (default 300)")
+        command.add_argument(
+            "--hardware",
+            help="fail unless the detected GPU name contains this substring (default: H100 for Slurm)",
+        )
         command.add_argument(
             "--nodes",
             type=_nodes,
@@ -1253,7 +1257,7 @@ def main() -> None:
             timeout=args.timeout or previous.get("timeout") or 300,
             qos=args.qos or previous.get("qos") or "staff-prod",
             walltime=args.time or previous.get("walltime") or "24:00:00",
-            hardware=None if local else previous.get("hardware") or "H100",
+            hardware=args.hardware if args.hardware is not None else (None if local else previous.get("hardware") or "H100"),
             container_image=args.container_image or previous.get("container_image"),
             local=local,
             nodes=args.nodes or previous.get("nodes") or DEFAULT_NODES,
