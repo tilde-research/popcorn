@@ -1,6 +1,6 @@
 [project]
 name = "popcorn"
-version = "0.1.0"
+version = "0.1.1"
 description = "A high performance development and dispatch library for high-performance machine learning kernels."
 readme = "README.md"
 license = "Apache-2.0"
