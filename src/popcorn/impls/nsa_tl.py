@@ -573,7 +573,14 @@ def nsa(
     o_cmp, lse_cmp = compression_attention(q, k_cmp, v_cmp, block_size, scale)
 
     block_indices = parallel_nsa_topk(
-        q=q, k=k_cmp, lse=lse_cmp, block_counts=block_count, block_size=block_size, scale=scale, cu_seqlens=None
+        q=q,
+        k=k_cmp,
+        TK=k.shape[1],
+        lse=lse_cmp,
+        block_counts=block_count,
+        block_size=block_size,
+        scale=scale,
+        cu_seqlens=None,
     )
     o_slc = selection_attention(q, k, v, block_indices, block_size, scale)
 
