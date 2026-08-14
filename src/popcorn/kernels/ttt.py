@@ -1,5 +1,5 @@
 import torch
-from jaxtyping import Float
+from jaxtyping import BFloat16, Float, Float32
 from torch import Tensor
 
 from popcorn import Tag, kernel, register_kernel
@@ -73,8 +73,27 @@ def ttt(
     return torch.cat(out, 2).transpose(1, 2).to(dtype)
 
 
+def _fla_ready(**arguments):
+    """Reject shapes that assert or illegal-access in FLA's Triton state update."""
+    q = arguments["q"]
+    mini_batch_size = arguments["mini_batch_size"]
+    if mini_batch_size < 16:
+        return False
+    chunks = (q.shape[1] + mini_batch_size - 1) // mini_batch_size
+    return chunks <= 65_535 and q.shape[-1] <= 128 and q.numel() <= 2**28
+
+
 # forward_only: the backward misses tolerance by ~3x in every dtype; see
 # ISSUES.md.
-@ttt.register("fla", source="fla.ops.ttt.chunk_ttt_linear", forward_only=True)
-def ttt_fla(q, k, v, w, b, eta, eps, mini_batch_size):
+@ttt.register("fla", source="fla.ops.ttt.chunk_ttt_linear", predicate=_fla_ready, forward_only=True)
+def ttt_fla(
+    q: Float32[Tensor, "batch seq heads head_dim"] | BFloat16[Tensor, "batch seq heads head_dim"],
+    k,
+    v,
+    w,
+    b,
+    eta,
+    eps,
+    mini_batch_size,
+):
     return kernel(q, k, v, w, b, eta[..., None], eps=eps, chunk_size=mini_batch_size)[0]

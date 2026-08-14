@@ -73,4 +73,4 @@ def nsa_compression_fla(
     block_size,
     softmax_scale,
 ):
-    return kernel(q, k, v, block_size=block_size, scale=softmax_scale)
+    return kernel(q, k, v, q.shape[1], block_size=block_size, scale=softmax_scale)

@@ -209,6 +209,16 @@ class TestPlan:
             _repair({"seq": seq}, args)
             assert args["mini_batch_size"] == expected
 
+    def test_ttt_fla_rejects_shapes_outside_its_safe_triton_region(self):
+        from popcorn.kernels.ttt import _fla_ready
+
+        safe = torch.empty(8, 4096, 64, 128, device="meta")
+        assert not _fla_ready(q=safe, mini_batch_size=15)
+        assert _fla_ready(q=safe, mini_batch_size=16)
+        assert not _fla_ready(q=torch.empty(1, 16, 1, 192, device="meta"), mini_batch_size=16)
+        assert not _fla_ready(q=torch.empty(8, 4096, 72, 128, device="meta"), mini_batch_size=16)
+        assert not _fla_ready(q=torch.empty(2, 1_048_576, 1, 32, device="meta"), mini_batch_size=16)
+
     def test_repair_snaps_num_groups_onto_a_divisor_of_channels(self):
         for channels, groups, expected in ((6144, 4, 4), (2560, 3, 2), (7, 4, 1)):
             args = {"num_groups": groups}

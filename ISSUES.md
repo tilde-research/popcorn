@@ -197,15 +197,31 @@ uv run popcorn bench run <op> --backend <backend>
 - Marking: runtime guard enforces the upstream launch contract: one head,
   `key_dim` divisible by 64, and power-of-two `value_dim`.
 
-## ttt / fla (backward accuracy)
+## ttt / fla (launch limits and numerical accuracy)
 
+- Case: any forward with `mini_batch_size < 16`, e.g.
+  `head_dim=16,seq=2,mini_batch_size=2,float32`
+- Error: `CompilationError: Input shapes should have M >= 1, N >= 1 and K >= 16`
+- Cause: the forward state update uses `mini_batch_size` as a Triton dot
+  reduction extent, which Triton requires to be at least 16.
+- Case: `head_dim > 128`, state grids with more than `2**28` query elements,
+  or more than 65,535 temporal chunks, e.g.
+  `batch=2,heads=1,seq=1048576,head_dim=32,mini_batch_size=16`
+- Error: respectively `AssertionError: current kernel does not support head
+  dimension larger than 128` and `CUDA error: an illegal memory access was
+  encountered`; the oversized chunk grid fails with `Triton Error [CUDA]:
+  invalid argument`.
+- Case: float16 forward on otherwise valid shapes, e.g.
+  `batch=8,heads=8,seq=512,head_dim=64`
+- Error: `out0: err 2.550e+00 > max(2*2.500e-01, 1e-03*959.3)`
 - Case: any backward, all dtypes, e.g. `head_dim=32,seq=64,float32`
 - Error: `grad q: err 3.626e-02 > max(2*0.000e+00, 2e-05*630.0)`
 - Cause: the fused backward misses the torch-autograd gradient by roughly 3x
   the tolerance in every dtype, including ieee fp32, so the deviation is in the
   kernel's gradient math rather than matmul precision
   (flash-linear-attention 0.4.2, `fla/ops/ttt`).
-- Marking: backend registered with `forward_only=True`.
+- Marking: narrowed to float32/bfloat16; runtime predicate enforces the
+  observed launch limits; backend registered with `forward_only=True`.
 
 ## bit_linear family / fla (quantization boundaries)
 

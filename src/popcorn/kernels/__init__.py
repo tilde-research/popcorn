@@ -4,7 +4,7 @@ from popcorn.core.sources import declare_backend
 
 declare_backend("cudnn", package="nvidia-cudnn-frontend", min_version="1.22.1", max_version="1.22.1", extra="cudnn")
 declare_backend("fa3", package="flash-attn-3", min_version="3.0.0", max_version="3.0.0", extra="fa3")
-declare_backend("fla", package="flash-linear-attention", min_version="0.4.0", max_version="0.4.2", extra="fla")
+declare_backend("fla", package="flash-linear-attention", min_version="0.5.2", max_version="0.5.2", extra="fla")
 declare_backend("liger", package="liger-kernel", min_version="0.6.0", max_version="0.7.0", extra="liger")
 declare_backend("popcorn", package="triton", min_version="3.7.1", max_version="3.7.1")
 declare_backend("quack", package="quack-kernels", min_version="0.5.0", max_version="0.5.0", extra="quack")

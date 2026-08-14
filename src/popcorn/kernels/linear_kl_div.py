@@ -32,4 +32,4 @@ def linear_kl_div(
 # fla always returns the loss in fp32, so only float32 inputs round-trip.
 @linear_kl_div.register("fla", source="fla.modules.fused_kl_div.fused_kl_div_loss")
 def linear_kl_div_fla(x: Float32[Tensor, "tokens hidden"], target_x, weight, target_weight, reduction):
-    return kernel(x, target_x, weight, target_weight, reduction=reduction)
+    return kernel(x, target_x.detach(), weight, target_weight.detach(), reduction=reduction)

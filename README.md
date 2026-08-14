@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/kernels-96-blue" alt="kernels"/>
   <img src="https://img.shields.io/badge/backends-8-blue" alt="backends"/>
   <img src="https://img.shields.io/badge/implementations-222-blue" alt="implementations"/>
-  <img src="https://img.shields.io/badge/grid%20rows-152%2C116-blue" alt="grid rows"/>
+  <img src="https://img.shields.io/badge/grid%20rows-152%2C304-blue" alt="grid rows"/>
 </p>
 <!-- /popcorn:badges -->
 
