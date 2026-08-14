@@ -72,18 +72,26 @@ dev = ["pytest>=8.0", "ruff>=0.15.21,<0.16", "pyright>=1.1.390", "submitit>=1.5.
 [tool.uv.sources]
 flash-attn-3 = { git = "https://github.com/Dao-AILab/flash-attention", subdirectory = "hopper", rev = "849f660f73b176e5ad5670e7f822c7fa9f3eaf8b" }
 
-# Its setup.py imports torch, and the extension has to compile against the same torch that
-# will later import it, or it loads and segfaults. uv's `match-runtime` build dependency is
-# the clean way to express that and is rejected here -- FA3 declares no static metadata, so
-# uv cannot know the runtime version before building -- which leaves build isolation off,
-# the method upstream documents. The build then reads the project environment, so unlike
-# every other extra this one is a two-step install and cannot be part of a bare `uv sync`:
-#
-#   uv sync                                  # torch and the build tools first
-#   uv pip install setuptools wheel packaging
-#   uv sync --extra fa3                      # nvcc, a Hopper GPU, tens of minutes
-[tool.uv]
-no-build-isolation-package = ["flash-attn-3"]
+# FA3 exposes only dynamic metadata, and its setup.py imports torch and its build tools
+# before uv can read that metadata. Mirror the pinned commit's runtime metadata so a
+# lock-less `uv sync` can resolve every extra without executing the setup.py.
+[[tool.uv.dependency-metadata]]
+name = "flash-attn-3"
+version = "3.0.0"
+requires-python = ">=3.10"
+requires-dist = ["torch", "einops", "packaging", "ninja"]
+
+# Build FA3 in isolation with the exact torch selected for this project. Keeping the setup
+# imports in the build environment avoids a persistent two-step install and rebuilding
+# against some other torch version, which can leave an extension that fails at import time.
+[tool.uv.extra-build-dependencies]
+flash-attn-3 = [
+    { requirement = "torch", match-runtime = true },
+    "setuptools",
+    "wheel",
+    "packaging",
+    "ninja",
+]
 
 [build-system]
 # huggingface-hub is a build requirement because setup.py fetches the report cache on the

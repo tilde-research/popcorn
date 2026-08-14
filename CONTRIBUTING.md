@@ -78,18 +78,17 @@ Three extras need a CUDA torch environment. `unsloth` does not resolve against C
 `transformer_engine` builds its PyTorch extension for the installed CUDA runtime, and `fa3` is source-only:
 FlashAttention-3 publishes nothing to PyPI, lives in the `hopper/` subdirectory of the flash-attention
 repository, and imports torch in its own `setup.py`.
-[pyproject.toml](pyproject.toml) points `flash-attn-3` at a pinned commit and turns build isolation off for it,
-which makes it the one extra that cannot come from a bare `uv sync` — the build reads the environment, so torch
-and the build tools have to be installed first:
+[pyproject.toml](pyproject.toml) points `flash-attn-3` at a pinned commit and supplies the static metadata its
+source tree lacks, so a bare `uv sync` can resolve every extra without trying to build FA3. When the extra is
+selected, uv adds the setup tools and the project's exact torch version to its isolated build environment:
 
 ```bash
-uv sync
-uv pip install setuptools wheel packaging
 uv sync --extra fa3          # needs nvcc, a Hopper GPU, and tens of minutes of compiling
 ```
 
-A downstream consumer needs the same two stanzas in their own `pyproject.toml`, because PyPI rejects direct git
-references in published metadata. This is why `fa3` is absent from the CI matrix rather than merely slow there.
+A downstream consumer needs the same source, dependency-metadata, and extra-build-dependencies entries in their
+own `pyproject.toml`, because PyPI rejects direct git references in published metadata. This is why `fa3` is
+absent from the CI matrix rather than merely slow there.
 The `cudnn` extra uses Torch's CUDA 13 runtime; cuDNN Frontend 1.22 rejects hosts that expose both CUDA 12 and
 CUDA 13 runtimes, so benchmark it in a CUDA 13-only image. The sweep preflights this and skips the phase rather
 than recording a grid of loader crashes.
