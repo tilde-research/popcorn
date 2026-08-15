@@ -1227,6 +1227,23 @@ class TestVersionGate:
         # Every extra is a backend and every backend an extra: no aggregate to drift out of sync.
         assert set(extras) == set(requirements)
 
+    def test_fa3_declares_resolution_and_build_metadata(self):
+        config = tomllib.loads((Path(__file__).parents[2] / "pyproject.toml").read_text())
+        fa3 = Requirement(config["project"]["optional-dependencies"]["fa3"][0])
+        uv = config["tool"]["uv"]
+        metadata = {item["name"]: item for item in uv["dependency-metadata"]}[fa3.name]
+
+        # uv resolves every extra when creating a lock, before FA3's build environment exists.
+        assert metadata["name"] == fa3.name
+        assert metadata["version"] in fa3.specifier
+        assert metadata["requires-python"] == ">=3.10"
+        assert metadata["requires-dist"] == ["torch", "einops", "packaging", "ninja"]
+
+        build = uv["extra-build-dependencies"][fa3.name]
+        assert {item for item in build if isinstance(item, str)} == {"setuptools", "wheel", "packaging", "ninja"}
+        assert [item for item in build if isinstance(item, dict)] == [{"requirement": "torch", "match-runtime": True}]
+        assert "no-build-isolation-package" not in uv
+
     def test_every_backend_is_tested_or_excused(self):
         """A new extra must join the kernels matrix or say in writing why it cannot.
 
