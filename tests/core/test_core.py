@@ -768,6 +768,30 @@ class TestTuning:
         )
         assert torch.equal(op(torch.zeros(2, 4)), -torch.ones(2, 4))
 
+    def test_close_fast_backends_do_not_fall_back_to_slow_torch(self):
+        op = make_op()
+        op.register("close")(lambda x, weight, flag: x - 2)
+        op.register("fast")(lambda x, weight, flag: x - 1)
+        self._record(
+            op,
+            ("close", {"D": 4}, 0.102, 1.0),
+            ("fast", {"D": 4}, 0.100, 1.0),
+        )
+        assert torch.equal(op(torch.zeros(2, 4)), -torch.ones(2, 4))
+        assert op.tuner.best(device="cpu", grad=False, D={4}).name == "fast"
+
+    def test_prefers_torch_when_within_indifference_of_fastest(self):
+        op = make_op()
+        op.register("fast")(lambda x, weight, flag: x - 1)
+        op.register("close")(lambda x, weight, flag: x - 2)
+        self._record(
+            op,
+            ("fast", {"D": 4}, 0.98, 1.0),
+            ("close", {"D": 4}, 0.99, 1.0),
+        )
+        assert torch.equal(op(torch.zeros(2, 4)), torch.ones(2, 4))
+        assert op.tuner.best(device="cpu", grad=False, D={4}).name == "torch"
+
     def test_picks_winner_for_matching_batch_shape(self):
         op = make_op()
         op.register("alt")(lambda x, weight, flag: x - 1)

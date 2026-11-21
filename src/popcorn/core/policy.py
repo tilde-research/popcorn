@@ -163,10 +163,9 @@ class Policy:
 
     def fastest(self, samples: Sequence[Sample]) -> str:
         times = {"torch": median(sample.time[1] for sample in samples)}
-        for impl in {sample.impl for sample in samples}:
+        for impl in sorted({sample.impl for sample in samples}):
             times[impl] = median(sample.time[0] for sample in samples if sample.impl == impl)
-        ordered = sorted(times, key=lambda name: times[name])
-        best, runner = ordered[0], ordered[1] if len(ordered) > 1 else ordered[0]
-        if runner != best and times[runner] <= times[best] * (1 + self.indifference):
-            return "torch" if "torch" in times else best
+        best = min(times, key=lambda name: (times[name], name))
+        if best != "torch" and times["torch"] <= times[best] * (1 + self.indifference):
+            return "torch"
         return best
